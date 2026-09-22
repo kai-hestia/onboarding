@@ -20,8 +20,53 @@ Then open **http://localhost:3001** in the dedicated automation Chrome with the 
 device simulator **"mc"** selected (800×1280 — same as the machine monitor).
 
 - Repos/branches: `mc-api` @ `v6`, `mc-ui` @ `v6`
-- Node: **20.20.2** via mise (pinned in each repo's local `mise.local.toml`)
+- Node: **20.20.2** via mise (pinned in the onboarding mock configs, symlinked as each
+  repo's local `mise.local.toml`)
 - tmux: session `mc`, window 3 → pane `%18` = mc-api, pane `%19` = mc-ui
+
+---
+
+## 0. Bootstrap on a fresh machine (start here)
+
+Prerequisites: `git`, [mise](https://mise.jdx.dev), and mise activated in your shell
+(`eval "$(mise activate bash)"` / `mise activate fish | source`). Node itself comes from mise.
+
+```fish
+# 1. clone both repos (branch v6)
+git clone git@github.com:Hestia-Technology/mc-api.git ~/repos/mc-api
+cd ~/repos/mc-api && git checkout v6
+git clone git@github.com:Hestia-Technology/mc-ui.git ~/repos/mc-ui
+cd ~/repos/mc-ui && git checkout v6
+
+# 2. create the local-only mise config in each repo
+#    → the mock configs are versioned in the onboarding repo; clone it and symlink them in
+git clone git@github.com:kai-hestia/onboarding.git ~/repos/onboarding
+ln -s ../onboarding/mc-api.toml ~/repos/mc-api/mise.local.toml
+ln -s ../onboarding/mc-ui.toml  ~/repos/mc-ui/mise.local.toml
+
+# 3. hide those files from git locally (per-clone; nothing is committed)
+printf 'mise.local.toml\n.mise.local.toml\n' >> ~/repos/mc-api/.git/info/exclude
+printf 'mise.local.toml\n.mise.local.toml\n' >> ~/repos/mc-ui/.git/info/exclude
+
+# 4. trust the configs and install dependencies
+cd ~/repos/mc-api && mise trust && npm ci
+cd ~/repos/mc-ui  && mise trust && npm ci
+
+# 5. run (two terminals)
+cd ~/repos/mc-api && mise run dev      # API  :3000
+cd ~/repos/mc-ui  && mise run dev      # UI   :3001
+```
+
+Notes:
+- Use **`npm ci`**, never `npm install` (lockfile churn — see §2).
+- No `.env` files are required; every local setting lives in `mise.local.toml` and the
+  generated, gitignored `api/` tree. Stubs, fixtures and the simulator are created
+  automatically by `mise run build` (run by `mise run dev`).
+- The whole mock lives in **`~/repos/onboarding/mc-api.toml`** (symlinked as mc-api's
+  `mise.local.toml`); the UI config is `~/repos/onboarding/mc-ui.toml`. Edit those files,
+  not this doc.
+- Browser automation (§6) is optional for running the apps: any browser at
+  `http://localhost:3001` works. The `mc` device simulator is a DevTools convenience.
 
 ---
 
@@ -63,130 +108,24 @@ Instead of modifying the team repos, every workaround lives in **gitignored/loca
 
 ## 3. What is local-only (not in git)
 
-### 3.1 `~/repos/mc-api/mise.local.toml`
+### 3.1 Mock configs — source of truth: the onboarding repo
 
-```toml
-[tools]
-node = "20"
+| Real file (versioned in onboarding) | Symlinked as (in the repo) |
+|---|---|
+| `~/repos/onboarding/mc-api.toml` | `~/repos/mc-api/mise.local.toml` |
+| `~/repos/onboarding/mc-ui.toml`  | `~/repos/mc-ui/mise.local.toml`  |
 
-[tasks.build]
-description = "Bundle mc-api for local run with hardware mocks (output in gitignored api/)"
-run = '''
-npx ncc build index.js -o api -m
-rm -rf api/bin
-cp -r bin api/bin
-printf '#!/bin/sh\nexit 0\n' > api/bin/gpio
-printf '#!/bin/sh\n[ -f .api.pid ] && kill "$(cat .api.pid)" 2>/dev/null\nexit 0\n' > api/bin/systemctl
-cat > api/bin/serialcom <<'MOCK'
-#!/usr/bin/env node
-// Fake multicooker controller for local dev: answers the command/file-upload
-// protocol and simulates a cook cycle so the UI can navigate.
-const state = { status: 'IDLE', sys: 'IDLE', alert: -1, temperature: 25, target: 0, heating: 0, cook: 0, motion: 0 }
-const out = (line) => process.stdout.write(line + '\n')
-const tick = () => out('~STATUS: ' + JSON.stringify(state))
-let timers = []
-const at = (ms, fn) => timers.push(setTimeout(fn, ms))
-function start_cook(id) {
-  timers.forEach(clearTimeout)
-  timers = []
-  out('~ORDER: ' + id)
-  out('~PREPINFO: 0 1 1 1 1 1 1 1 0')
-  Object.assign(state, { status: 'BUSY', sys: 'PRECOOK', cook: 1, heating: 0, target: 0 })
-  tick()
-  at(4000, () => { Object.assign(state, { cook: 2 }); tick() })
-  at(8000, () => {
-    out('~COOKINFO: 0 (POURBOXF) (WOKTEMP 180) 1 3 60 180')
-    Object.assign(state, { sys: 'COOK', cook: 3, heating: 1, target: 180 })
-    tick()
-  })
-  at(14000, () => {
-    out('~COOKINFO: 0 (WOKTEMP 180) (POURFOOD) 2 3 60 120')
-    tick()
-  })
-  at(20000, () => {
-    out('~COOKINFO: 0 (POURFOOD) (POURFOOD) 3 3 0 0')
-    Object.assign(state, { status: 'IDLE', sys: 'IDLE', cook: 0, heating: 0, target: 0 })
-    tick()
-  })
-}
-let buf = Buffer.alloc(0)
-let upload = null
-const handle = (line) => {
-  if (!line) return
-  const [cmd, ...args] = line.split(' ')
-  if (cmd === 'UPLOADF') {
-    out('~CMD: OK')
-    upload = parseInt(args[1], 10) || 0
-    out('~UPLOADF: START')
-  } else if (cmd === 'COOK' || cmd === 'SCOOK') {
-    out('~CMD: OK')
-    start_cook(args[0])
-  } else {
-    out('~CMD: OK')
-  }
-}
-const pump = () => {
-  for (;;) {
-    if (upload !== null) {
-      const size = Math.min(1024, upload)
-      if (buf.length < size + 2) return
-      buf = buf.subarray(size + 2)
-      upload -= size
-      out('~UPLOADF: CHUNK')
-      if (upload <= 0) upload = null
-      continue
-    }
-    if (buf.length < 52) return
-    const line = buf.subarray(0, 50).toString('utf8').split('\0')[0].trim()
-    buf = buf.subarray(52)
-    handle(line)
-  }
-}
-process.stdin.on('data', (d) => { buf = Buffer.concat([buf, d]); pump() })
-setInterval(tick, 1000)
-tick()
-MOCK
-chmod +x api/bin/*
-[ -f api/menu/cuisinesbymenu.json ] || (mkdir -p api/menu && printf '%s\n' '[{"name":"Sample Menu","results":[{"name":"Sample Category","results":[{"id":1,"name":"Sample Recipe"}]}]}]' > api/menu/cuisinesbymenu.json)
-[ -f api/menu/1.json ] || printf '%s\n' '{"uuid":"00000000-0000-0000-0000-000000000001","cuisine_name":"Sample Recipe","actions":[{"time":60}]}' > api/menu/1.json
-mkdir -p api/menu/machine api/tmp
-[ -f api/menu/machine/1_1_v1.json ] || (printf '%s\n' '{"id":1,"version":1,"uuid":"00000000-0000-0000-0000-000000000001","cuisine_name":"Sample Recipe","actions":[{"time":60}]}' > api/menu/machine/1_1_v1.json)
-node -e "const fs=require('fs'),f='api/settings.json';const s=fs.existsSync(f)?JSON.parse(fs.readFileSync(f)):{};s.disable_ui_clients_check=true;s.machine_name='DEV';fs.writeFileSync(f,JSON.stringify(s,null,2))"
-'''
+- `mc-api.toml`: Node 20 pin, the `build` task (ncc bundle + gpio/systemctl/serialcom
+  mocks + menu fixtures + settings patch) and the watchdog `dev` task.
+- `mc-ui.toml`: Node 20 pin + the `dev` task (`npm run dev`).
+- Both repo paths are **symlinks** to the onboarding files, so editing either side edits
+  the same file and every change is git-tracked in onboarding. On a machine without the
+  onboarding clone, a plain copy of those two files works just as well.
+- mise resolves `{{config_root}}` through the symlink to the repo directory, so
+  `mise run build` still writes `api/` inside `mc-api` (verified 2026-09-22).
+- The simulator's cook timing is the `at(...)` calls in `mc-api.toml`.
 
-[tasks.dev]
-description = "Run mc-api on :3000 (hardware mocked, auto-restarts like the systemd unit)"
-depends = ["build"]
-dir = "{{config_root}}/api"
-run = '''
-trap 'rm -f .api.pid; exit 0' INT TERM
-while true; do
-  PATH="$PWD/bin:$PATH" node index.js &
-  NODE_PID=$!
-  echo "$NODE_PID" > .api.pid
-  if wait "$NODE_PID"; then
-    code=0
-  else
-    code=$?
-  fi
-  echo "mc-api exited (code $code), restarting in 2s... (Ctrl+C to stop)"
-  sleep 2
-done
-'''
-```
-
-### 3.2 `~/repos/mc-ui/mise.local.toml`
-
-```toml
-[tools]
-node = "20"
-
-[tasks.dev]
-description = "Run mc-ui dev server on :3001"
-run = "npm run dev"
-```
-
-### 3.3 `.git/info/exclude` (both repos, appended)
+### 3.2 `.git/info/exclude` (both repos, appended)
 
 ```
 mise.local.toml
@@ -196,7 +135,7 @@ mise.local.toml
 This keeps the local config invisible to teammates and out of `git status`
 (we deliberately did **not** touch the tracked `.gitignore`).
 
-### 3.4 Generated files inside `mc-api/api/` (all gitignored via `api/*`)
+### 3.3 Generated files inside `mc-api/api/` (all gitignored via `api/*`)
 
 | Path | What it is |
 |---|---|
@@ -292,6 +231,17 @@ In the automation Chrome: `Ctrl+Shift+I` → device toolbar → **Dimensions: mc
 We must keep **touch emulation on**: with it, taps work; mouse clicks can be used too
 after coordinate correction.
 
+**Recreate it on a new machine:** DevTools (`Ctrl+Shift+I`) → device toolbar →
+Dimensions dropdown → *Edit…* → *Add custom device*: name `mc`, width `800`,
+height `1280`, DPR `1.5`, check **Touch**. Save, then select it in the dropdown.
+
+On a non-WSL machine no bridge is needed — browser-harness attaches to the local
+Chrome (install/enable it per the browser-harness skill). The WSL↔Windows bridge
+scripts under `~/.config/browser-harness/wsl-bridge/` are machine-specific helpers,
+not part of any repo; a new Windows+WSL setup must recreate/copy them from the
+browser-harness install docs. Everything else in §6 still applies (input-scale
+calibration, touch taps, `capture_screenshot`).
+
 ### Input-coordinate gotcha (important for automation)
 With DevTools device mode active, the 800×1280 page is scaled to fit the window
 (real inner width was 760 ⇒ factor **1.0525**). Raw CDP input coordinates are in the
@@ -365,7 +315,7 @@ end
 
 - Interface mapping: `%18` = mc-api pane, `%19` = mc-ui pane (tmux session `mc`, window 3).
 - API logs: console (tmux pane) + `api/logs/mcapi-current.log`.
-- Changing the simulated cook timing: edit `at(...)` in `mc-api/mise.local.toml`, restart.
+- Changing the simulated cook timing: edit `at(...)` in `~/repos/onboarding/mc-api.toml`, restart.
 - Adding real recipes: drop files into `api/menu/` + `api/menu/machine/` (persist across
   builds; fixtures are only created if missing), or use the UI's menu upload.
 - If the bridge is down (`curl http://127.0.0.1:19333/json/version` fails):

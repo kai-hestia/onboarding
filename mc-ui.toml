@@ -1,0 +1,6 @@
+[tools]
+node = "20"
+
+[tasks.dev]
+description = "Run mc-ui dev server on :3001"
+run = "npm run dev"

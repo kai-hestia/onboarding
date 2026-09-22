@@ -1,0 +1,107 @@
+[tools]
+node = "20"
+
+[tasks.build]
+description = "Bundle mc-api for local run with hardware mocks (output in gitignored api/)"
+run = '''
+npx ncc build index.js -o api -m
+rm -rf api/bin
+cp -r bin api/bin
+printf '#!/bin/sh\nexit 0\n' > api/bin/gpio
+printf '#!/bin/sh\n[ -f .api.pid ] && kill "$(cat .api.pid)" 2>/dev/null\nexit 0\n' > api/bin/systemctl
+cat > api/bin/serialcom <<'MOCK'
+#!/usr/bin/env node
+// Fake multicooker controller for local dev: answers the command/file-upload
+// protocol and simulates a cook cycle so the UI can navigate.
+const state = { status: 'IDLE', sys: 'IDLE', alert: -1, temperature: 25, target: 0, heating: 0, cook: 0, motion: 0 }
+const out = (line) => process.stdout.write(line + '\n')
+const tick = () => out('~STATUS: ' + JSON.stringify(state))
+let timers = []
+const at = (ms, fn) => timers.push(setTimeout(fn, ms))
+function start_cook(id) {
+  timers.forEach(clearTimeout)
+  timers = []
+  out('~ORDER: ' + id)
+  out('~PREPINFO: 0 1 1 1 1 1 1 1 0')
+  Object.assign(state, { status: 'BUSY', sys: 'PRECOOK', cook: 1, heating: 0, target: 0 })
+  tick()
+  at(4000, () => { Object.assign(state, { cook: 2 }); tick() })
+  at(8000, () => {
+    out('~COOKINFO: 0 (POURBOXF) (WOKTEMP 180) 1 3 60 180')
+    Object.assign(state, { sys: 'COOK', cook: 3, heating: 1, target: 180 })
+    tick()
+  })
+  at(14000, () => {
+    out('~COOKINFO: 0 (WOKTEMP 180) (POURFOOD) 2 3 60 120')
+    tick()
+  })
+  at(20000, () => {
+    out('~COOKINFO: 0 (POURFOOD) (POURFOOD) 3 3 0 0')
+    Object.assign(state, { status: 'IDLE', sys: 'IDLE', cook: 0, heating: 0, target: 0 })
+    tick()
+  })
+}
+let buf = Buffer.alloc(0)
+let upload = null
+const handle = (line) => {
+  if (!line) return
+  const [cmd, ...args] = line.split(' ')
+  if (cmd === 'UPLOADF') {
+    out('~CMD: OK')
+    upload = parseInt(args[1], 10) || 0
+    out('~UPLOADF: START')
+  } else if (cmd === 'COOK' || cmd === 'SCOOK') {
+    out('~CMD: OK')
+    start_cook(args[0])
+  } else {
+    out('~CMD: OK')
+  }
+}
+const pump = () => {
+  for (;;) {
+    if (upload !== null) {
+      const size = Math.min(1024, upload)
+      if (buf.length < size + 2) return
+      buf = buf.subarray(size + 2)
+      upload -= size
+      out('~UPLOADF: CHUNK')
+      if (upload <= 0) upload = null
+      continue
+    }
+    if (buf.length < 52) return
+    const line = buf.subarray(0, 50).toString('utf8').split('\0')[0].trim()
+    buf = buf.subarray(52)
+    handle(line)
+  }
+}
+process.stdin.on('data', (d) => { buf = Buffer.concat([buf, d]); pump() })
+setInterval(tick, 1000)
+tick()
+MOCK
+chmod +x api/bin/*
+[ -f api/menu/cuisinesbymenu.json ] || (mkdir -p api/menu && printf '%s\n' '[{"name":"Sample Menu","results":[{"name":"Sample Category","results":[{"id":1,"name":"Sample Recipe"}]}]}]' > api/menu/cuisinesbymenu.json)
+[ -f api/menu/1.json ] || printf '%s\n' '{"uuid":"00000000-0000-0000-0000-000000000001","cuisine_name":"Sample Recipe","actions":[{"time":60}]}' > api/menu/1.json
+mkdir -p api/menu/machine api/tmp
+[ -f api/menu/machine/1_1_v1.json ] || (printf '%s\n' '{"id":1,"version":1,"uuid":"00000000-0000-0000-0000-000000000001","cuisine_name":"Sample Recipe","actions":[{"time":60}]}' > api/menu/machine/1_1_v1.json)
+node -e "const fs=require('fs'),f='api/settings.json';const s=fs.existsSync(f)?JSON.parse(fs.readFileSync(f)):{};s.disable_ui_clients_check=true;s.machine_name='DEV';fs.writeFileSync(f,JSON.stringify(s,null,2))"
+'''
+
+[tasks.dev]
+description = "Run mc-api on :3000 (hardware mocked, auto-restarts like the systemd unit)"
+depends = ["build"]
+dir = "{{config_root}}/api"
+run = '''
+trap 'rm -f .api.pid; exit 0' INT TERM
+while true; do
+  PATH="$PWD/bin:$PATH" node index.js &
+  NODE_PID=$!
+  echo "$NODE_PID" > .api.pid
+  if wait "$NODE_PID"; then
+    code=0
+  else
+    code=$?
+  fi
+  echo "mc-api exited (code $code), restarting in 2s... (Ctrl+C to stop)"
+  sleep 2
+done
+'''
