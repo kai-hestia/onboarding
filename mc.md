@@ -267,6 +267,13 @@ Wire format (observed from `src/Machine.js`):
 | `~ORDER: <id>` | sets `MachineStatus.cook.id` (used by UI routing) |
 | `~PREPINFO: 0 1 1 1 1 1 1 1 0` | cook mode + 7 slot statuses |
 | `~COOKINFO: <mode> (<cur>) (<next>) <step> <total> <remain> <total_sec>` | step/action/countdown |
+| `~INIT: 127 127` | marks all 7 init checks done (sent on the `INIT` command) |
+
+**Boot flow (added for local recovery).** The mock starts with `sys: 'RESET'` instead of
+`IDLE`, which makes the UI route itself to the activation screen (`/qrcode`) on every page
+load and after every API restart. Tapping **Activate** sends the real `INIT` command; the
+mock then answers `~INIT: 127 127`, flips `sys` to `IDLE`, and the UI goes `/init` →
+`/home`. This is also the escape hatch for the blank-route bug below.
 
 Cook cycle triggered by a real `COOK <id>` command:
 
@@ -351,7 +358,13 @@ Useful facts when calibrating:
    `service_restart.sh` fails, the unhandled rejection kills the API process. Production
    is saved by systemd; locally our stub + watchdog mask it.
 3. **UI `global.restart()` pushes `/start`** (`mc-ui/src/main.js:261`) — there is no
-   `/start` route (only `/`), so the restart button strands the app.
+   `/start` route (only `/`), so vue-router lands on an empty no-match route (blank
+   screen) and a refresh keeps `#/start`.
+   Suggested fix: push `'/'`, and in `protocol.js` let the IDLE branch also route the
+   splash to home (`if (path === '/' || path.startsWith('/cook')) router_push_guarded('/home')`).
+   Locally, the simulator's boot flow (§5) routes the UI away from the blank route to
+   `/qrcode` once the API is back, so recovery is Activate → `/init` → `/home`
+   (verified).
 4. **`protocol.js:135` calls `global.$t`** in the alert fallback — undefined in this
    branch; any unmapped `alert_id` crashes the UI (`Uncaught TypeError`).
 5. **`bin/` files missing exec bit in git** (e.g. `serialcom`, `touch_check_alive.sh`,
@@ -410,5 +423,9 @@ PY
   (step 1/3 → 2/3, live countdown ring, next action) → back home, all under the
   `mc` device simulator (800×1280, DPR 1.5, touch).
 - No protocol parse errors; both repos `git status` clean.
+- Restart flow: clicking restart still blanks the page (`#/start`), but the watchdog
+  restarts the API, the mock reports `RESET`, the UI re-routes to `/qrcode`, and
+  Activate → `/init` → `/home` — verified end to end
+  (`/tmp/mc-restart-recovered.png`).
 
 Screenshots from the session: `/tmp/mcdev-*.png` (e.g. `mcdev-cooking.png`).

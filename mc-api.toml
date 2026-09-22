@@ -13,7 +13,9 @@ cat > api/bin/serialcom <<'MOCK'
 #!/usr/bin/env node
 // Fake multicooker controller for local dev: answers the command/file-upload
 // protocol and simulates a cook cycle so the UI can navigate.
-const state = { status: 'IDLE', sys: 'IDLE', alert: -1, temperature: 25, target: 0, heating: 0, cook: 0, motion: 0 }
+// boot like a real controller: RESET routes the UI to the activation screen;
+// sending INIT marks the machine initialized and drops it to IDLE
+const state = { status: 'IDLE', sys: 'RESET', alert: -1, temperature: 25, target: 0, heating: 0, cook: 0, motion: 0 }
 const out = (line) => process.stdout.write(line + '\n')
 const tick = () => out('~STATUS: ' + JSON.stringify(state))
 let timers = []
@@ -53,6 +55,11 @@ const handle = (line) => {
   } else if (cmd === 'COOK' || cmd === 'SCOOK') {
     out('~CMD: OK')
     start_cook(args[0])
+  } else if (cmd === 'INIT') {
+    out('~CMD: OK')
+    out('~INIT: 127 127')
+    Object.assign(state, { sys: 'IDLE' })
+    tick()
   } else {
     out('~CMD: OK')
   }
