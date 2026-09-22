@@ -68,34 +68,84 @@ Notes:
 - Browser automation (§6) is optional for running the apps: any browser at
   `http://localhost:3001` works. The `mc` device simulator is a DevTools convenience.
 
-### Tmux layout — two panes, one per repo
+### Tmux layout — session `mc`, window `mc-ui-api`
 
-Any two terminals work. If you use tmux, one pane per repo:
-
-```bash
-tmux new -s mc                 # create/attach a session named mc
-cd ~/repos/mc-api              # pane 1 (run `mise run dev` here)
-# split with prefix + %  (side by side)  or  prefix + "  (stacked)
-cd ~/repos/mc-ui               # pane 2 (run `mise run dev` here)
-```
-
-No pane ids to remember — find and target panes by their working directory:
+Convention: tmux session `mc`, one window named **`mc-ui-api`**, two panes —
+pane 1 = mc-api, pane 2 = mc-ui. The `mcdev` helper reuses the window if it exists,
+otherwise creates and splits it, then (re)starts both dev servers in it:
 
 ```fish
-# list panes with their directories
-tmux list-panes -a -F '#{pane_id} #{pane_current_path}'
+mcdev
+```
 
-# restart both dev servers in every mc-api / mc-ui pane (matched by cwd)
-# ⚠ run this from a pane whose cwd is neither repo, otherwise it Ctrl+C's itself
-for p in (tmux list-panes -a -F '#{pane_id} #{pane_current_path}')
-    set -l parts (string split ' ' $p)
-    if string match -q '*/repos/mc-*' $parts[2]
-        tmux send-keys -t $parts[1] C-c
-        sleep 0.3
-        tmux send-keys -t $parts[1] 'mise run dev' Enter
+Installed at `~/.config/fish/functions/mcdev.fish`:
+
+```fish
+function mcdev --description 'Start or reuse the mc-ui-api tmux window and run mc-api + mc-ui'
+    set -l sess mc
+    set -l win mc-ui-api
+
+    # session / window: reuse if present, create + split otherwise
+    if not tmux has-session -t $sess 2>/dev/null
+        tmux new-session -d -s $sess -n $win -c ~/repos/mc-api
+        tmux split-window -t $sess:$win -h -c ~/repos/mc-ui
+    else if not tmux list-windows -t $sess -F '#{window_name}' | string match -q -- $win
+        tmux new-window -t $sess -n $win -c ~/repos/mc-api
+        tmux split-window -t $sess:$win -h -c ~/repos/mc-ui
+    end
+
+    # make sure it has (at least) two panes, use the first two
+    set -l panes (tmux list-panes -t $sess:$win -F '#{pane_id}')
+    if test (count $panes) -lt 2
+        tmux split-window -t $sess:$win -h -c ~/repos/mc-ui
+        set panes (tmux list-panes -t $sess:$win -F '#{pane_id}')
+    end
+    if test (count $panes) -gt 2
+        set panes $panes[1..2]
+    end
+
+    tmux select-window -t $sess:$win
+    tmux select-pane -t $panes[1]
+
+    # pane 1 = mc-api, pane 2 = mc-ui; restart the dev server in each
+    set -l self $TMUX_PANE
+    set -l i 1
+    for p in $panes
+        set -l repo ~/repos/mc-api
+        if test $i -gt 1
+            set repo ~/repos/mc-ui
+        end
+        if test -n "$self"; and test "$p" = "$self"
+            echo "mcdev: skipping my own pane $p — restart it manually if needed"
+        else
+            tmux send-keys -t $p C-c
+            sleep 0.3
+            tmux send-keys -t $p "cd $repo && mise run dev" Enter
+        end
+        set i (math $i + 1)
+    end
+
+    if not set -q TMUX
+        tmux attach -t $sess
     end
 end
 ```
+
+Manual equivalent (no function needed):
+
+```bash
+tmux has-session -t mc 2>/dev/null || tmux new-session -d -s mc -n mc-ui-api -c ~/repos/mc-api
+tmux list-windows -t mc -F '#{window_name}' | grep -qx mc-ui-api || \
+  tmux new-window -t mc -n mc-ui-api -c ~/repos/mc-api
+tmux split-window -t mc:mc-ui-api -h -c ~/repos/mc-ui   # only if it has a single pane
+```
+
+Notes:
+- `mcdev` skips its own pane (`$TMUX_PANE`) if you run it from inside the window, so it
+  cannot Ctrl+C the shell that is running it. That pane has to be started by hand.
+- Run from outside tmux, it attaches to the session at the end.
+- Diagnostics / locating panes without ids:
+  `tmux list-panes -a -F '#{pane_id} #{pane_current_path}'`
 
 ---
 
