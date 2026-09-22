@@ -9,10 +9,10 @@
 ## TL;DR — daily commands
 
 ```fish
-# terminal 1 (tmux pane %18)
+# terminal 1 — mc-api
 cd ~/repos/mc-api && mise run dev      # API on :3000, mocked hardware, auto-restarts
 
-# terminal 2 (tmux pane %19)
+# terminal 2 — mc-ui
 cd ~/repos/mc-ui && mise run dev       # Vite on :3001
 ```
 
@@ -22,7 +22,7 @@ device simulator **"mc"** selected (800×1280 — same as the machine monitor).
 - Repos/branches: `mc-api` @ `v6`, `mc-ui` @ `v6`
 - Node: **20.20.2** via mise (pinned in the onboarding mock configs, symlinked as each
   repo's local `mise.local.toml`)
-- tmux: session `mc`, window 3 → pane `%18` = mc-api, pane `%19` = mc-ui
+- tmux: one pane per repo — see “Tmux layout” under §0
 
 ---
 
@@ -67,6 +67,35 @@ Notes:
   not this doc.
 - Browser automation (§6) is optional for running the apps: any browser at
   `http://localhost:3001` works. The `mc` device simulator is a DevTools convenience.
+
+### Tmux layout — two panes, one per repo
+
+Any two terminals work. If you use tmux, one pane per repo:
+
+```bash
+tmux new -s mc                 # create/attach a session named mc
+cd ~/repos/mc-api              # pane 1 (run `mise run dev` here)
+# split with prefix + %  (side by side)  or  prefix + "  (stacked)
+cd ~/repos/mc-ui               # pane 2 (run `mise run dev` here)
+```
+
+No pane ids to remember — find and target panes by their working directory:
+
+```fish
+# list panes with their directories
+tmux list-panes -a -F '#{pane_id} #{pane_current_path}'
+
+# restart both dev servers in every mc-api / mc-ui pane (matched by cwd)
+# ⚠ run this from a pane whose cwd is neither repo, otherwise it Ctrl+C's itself
+for p in (tmux list-panes -a -F '#{pane_id} #{pane_current_path}')
+    set -l parts (string split ' ' $p)
+    if string match -q '*/repos/mc-*' $parts[2]
+        tmux send-keys -t $parts[1] C-c
+        sleep 0.3
+        tmux send-keys -t $parts[1] 'mise run dev' Enter
+    end
+end
+```
 
 ---
 
@@ -284,7 +313,7 @@ Useful facts when calibrating:
 
 ```fish
 # restart API after editing the mock/config
-#   (in tmux pane %18): Ctrl+C then
+#   (in the mc-api pane): Ctrl+C then
 mise run dev
 
 # rebuild bundle only
@@ -305,15 +334,11 @@ browser-harness <<'PY'
 js("location.href='http://localhost:3001/#/home'; location.reload()")
 PY
 
-# tmux: restart both dev servers (from a pane outside window 3)
-for p in (tmux list-panes -t mc:3 -F '#{pane_id}')
-    tmux send-keys -t $p C-c
-    sleep 0.3
-    tmux send-keys -t $p 'mise run dev' Enter
-end
+# tmux: restart both dev servers — see "Tmux layout" under §0
 ```
 
-- Interface mapping: `%18` = mc-api pane, `%19` = mc-ui pane (tmux session `mc`, window 3).
+- tmux mapping: one pane per repo; locate them with
+  `tmux list-panes -a -F '#{pane_id} #{pane_current_path}'`.
 - API logs: console (tmux pane) + `api/logs/mcapi-current.log`.
 - Changing the simulated cook timing: edit `at(...)` in `~/repos/onboarding/mc-api.toml`, restart.
 - Adding real recipes: drop files into `api/menu/` + `api/menu/machine/` (persist across
