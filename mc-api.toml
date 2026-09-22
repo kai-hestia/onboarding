@@ -8,16 +8,30 @@ npx ncc build index.js -o api -m
 rm -rf api/bin
 cp -r bin api/bin
 printf '#!/bin/sh\nexit 0\n' > api/bin/gpio
+printf '#!/bin/sh\nexit 0\n' > api/bin/brightness
+printf '#!/bin/sh\necho "####################"\nexit 0\n' > api/bin/pic32prog
 printf '#!/bin/sh\n[ -f .api.pid ] && kill "$(cat .api.pid)" 2>/dev/null\nexit 0\n' > api/bin/systemctl
+# mark wake-ups so the simulator can boot again (board_enable runs on wake)
+printf '\ntouch /tmp/mc-mock-reset\n' >> api/bin/board_enable.sh
 cat > api/bin/serialcom <<'MOCK'
 #!/usr/bin/env node
 // Fake multicooker controller for local dev: answers the command/file-upload
 // protocol and simulates a cook cycle so the UI can navigate.
 // boot like a real controller: RESET routes the UI to the activation screen;
 // sending INIT marks the machine initialized and drops it to IDLE
+const fs = require('fs')
+const RESET_FLAG = '/tmp/mc-mock-reset'
+try { fs.unlinkSync(RESET_FLAG) } catch {}
 const state = { status: 'IDLE', sys: 'RESET', alert: -1, temperature: 25, target: 0, heating: 0, cook: 0, motion: 0 }
 const out = (line) => process.stdout.write(line + '\n')
-const tick = () => out('~STATUS: ' + JSON.stringify(state))
+const tick = () => {
+  // board_enable.sh touches the flag on wake; boot again so the UI can re-activate
+  if (fs.existsSync(RESET_FLAG)) {
+    try { fs.unlinkSync(RESET_FLAG) } catch {}
+    Object.assign(state, { sys: 'RESET' })
+  }
+  out('~STATUS: ' + JSON.stringify(state))
+}
 let timers = []
 const at = (ms, fn) => timers.push(setTimeout(fn, ms))
 function start_cook(id) {

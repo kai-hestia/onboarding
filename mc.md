@@ -221,8 +221,11 @@ This keeps the local config invisible to teammates and out of `git status`
 | `api/index.js` | ncc bundle of `index.js` (what production runs) |
 | `api/bin/gpio` | no-op stub for WiringPi `gpio` (board_disable/enable.sh) |
 | `api/bin/systemctl` | stub: kills the API pid from `.api.pid` then exits 0 |
+| `api/bin/brightness` | no-op stub; sleep/wake call this ARM binary — without it the API crashes |
+| `api/bin/pic32prog` | fake firmware flasher (prints progress, exits 0) |
 | `api/bin/serialcom` | **protocol simulator** (Node) — see §5 |
 | `api/bin/*` | copies of `bin/` with `chmod +x` applied |
+| `api/bin/board_enable.sh` | repo script + `touch /tmp/mc-mock-reset` appended (wake signal) |
 | `api/menu/cuisinesbymenu.json` | sample menu fixture (Menu → Category → Recipe) |
 | `api/menu/1.json` | sample cuisine/recipe detail (`uuid`, `cuisine_name`, `actions`) |
 | `api/menu/machine/1_1_v1.json` | machine recipe; must contain `id`, `version`, `uuid` |
@@ -239,6 +242,7 @@ This keeps the local config invisible to teammates and out of `git status`
 | `npx ncc build` into `api/` | sidesteps the mixed CJS/ESM source; matches production |
 | `gpio` stub | `board_disable.sh`/`board_enable.sh` need WiringPi, Pi-only |
 | `systemctl` stub | `service_restart.sh` runs `systemctl restart multicooker`; locally it kills the API so the watchdog brings it back (mimics systemd) |
+| `brightness` / `pic32prog` stubs | both are ARM binaries invoked by sleep/wake and firmware update; a failed spawn becomes an unhandled rejection that kills the API |
 | watchdog loop | local `Restart=always`; API also survives crashes (e.g. unhandled rejections) |
 | `chmod +x api/bin/*` | git stores several `bin/` files as `100644`; the Pi's updater runs `chmod -R 755 ./bin/*`, dev clones don't. Without it the UI touch-check spawn crashes the API ~30 s in with `EACCES` |
 | `serialcom` simulator | provides `~STATUS` heartbeats (prevents `server_state='FAILURE'` after 10 s), answers upload/command protocol, drives a cook cycle |
@@ -274,6 +278,11 @@ Wire format (observed from `src/Machine.js`):
 load and after every API restart. Tapping **Activate** sends the real `INIT` command; the
 mock then answers `~INIT: 127 127`, flips `sys` to `IDLE`, and the UI goes `/init` →
 `/home`. This is also the escape hatch for the blank-route bug below.
+
+**Wake signal.** `wake()` runs `./bin/board_enable.sh`; the generated copy of that script
+touches `/tmp/mc-mock-reset`. The 1 Hz status loop notices the flag, removes it and flips
+back to `sys: 'RESET'`, so the UI leaves `/sleep`/splash and re-enters the activation
+screen — verified: sleep → wake → Activate → `/home`.
 
 Cook cycle triggered by a real `COOK <id>` command:
 
@@ -423,6 +432,8 @@ PY
   (step 1/3 → 2/3, live countdown ring, next action) → back home, all under the
   `mc` device simulator (800×1280, DPR 1.5, touch).
 - No protocol parse errors; both repos `git status` clean.
+- Sleep/wake: `/machine/sleep` and `/machine/wake` no longer crash the API (brightness
+  stubbed); wake pulls the UI back to `/qrcode` via the reset flag, Activate → `/home`.
 - Restart flow: clicking restart still blanks the page (`#/start`), but the watchdog
   restarts the API, the mock reports `RESET`, the UI re-routes to `/qrcode`, and
   Activate → `/init` → `/home` — verified end to end
