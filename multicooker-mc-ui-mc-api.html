@@ -205,13 +205,16 @@
       <a class="sub" href="#mcapi-modules">3.1 模块与 API 一览</a>
       <a class="sub" href="#mcapi-machine">3.2 Machine：串口与状态广播</a>
       <a class="sub" href="#mcapi-update">3.3 升级与分发（Azure Blob）</a>
+      <a class="sub" href="#mcapi-proto">3.4 控制板协议（串口帧与 ~ 响应）</a>
+      <a class="sub" href="#mcapi-flows">3.5 运行时全链路（启动 / 做菜 / 睡眠 / 重启）</a>
       <a href="#applib">4 · ⭐ App Library 专章</a>
       <a class="sub" href="#applib-where">4.1 位置与触发方式</a>
       <a class="sub" href="#applib-items">4.2 现有条目拆解</a>
       <a class="sub" href="#applib-style">4.3 样式与布局</a>
       <a class="sub" href="#applib-mod">4.4 修改指南 + 避坑</a>
-      <a href="#dev">5 · 本地开发与发布</a>
+      <a href="#dev">5 · 本地开发（mise + 模拟器）与发布</a>
       <a href="#reading">6 · 建议阅读顺序</a>
+      <a href="#bugs">7 · 已知问题（上游 bug + 本地坑）</a>
     </div>
   </nav>
 
@@ -227,6 +230,8 @@
         <span class="chip">Serial / CRC16</span>
         <span class="chip">MQTT</span>
         <span class="chip">Azure Blob 升级</span>
+        <span class="chip">mise + 本地模拟器</span>
+        <span class="chip">DevTools "mc" 设备</span>
       </div>
     </header>
 
@@ -347,23 +352,32 @@ disable_route_status: false     <span class="cmt">// true = 关闭"状态驱动�
       </div>
 
       <h3 id="mcui-status">2.2 状态驱动的路由（重点，改页面前必读）</h3>
-      <p>mc-ui 的页面不是用户想去哪就去哪——<strong>机器状态会强制导航</strong>：</p>
+      <p>mc-ui 的页面不是用户想去哪就去哪——<strong>机器状态会强制导航</strong>。链路是：</p>
       <ol>
-        <li><code>main.js</code> 建立 WebSocket <code>ws://&lt;ip&gt;:3000/machine/status</code>，把收到的 JSON 整个覆盖进 <code>MachineStatus</code> store（含 <code>MachineStatusPrev</code>）。</li>
-        <li>每次收到消息调用 <code>protocol.js</code> 的 <code>route_machine_status(global)</code>，规则包括：
-          <ul>
-            <li><code>server_state === 'SLEEP'</code> → 强制 <code>/sleep</code></li>
-            <li><code>server_state === 'FAILURE'</code> → 强制 <code>/error</code></li>
-            <li><code>system_state === 'ERROR'</code> → 按错误码跳 <code>/error?error_name=gripper|overheat|emo</code></li>
-            <li>开始做菜 → 自动进烹饪页；做完 → 弹 <code>order_completed</code> 等</li>
-            <li>alert_id → 各种弹窗（<code>alert_id_to_popup_name</code>）</li>
-          </ul>
-        </li>
-        <li>例外名单 <code>route_exclude</code>：<code>/backend</code>、<code>/settings/general</code>、<code>/settings/factorysettings</code> 不会被强制跳走。</li>
+        <li><code>main.js</code> 连 WebSocket <code>ws://&lt;ip&gt;:3000/machine/status</code>，把每帧 JSON 覆盖进 <code>MachineStatus</code> store（同时维护 <code>MachineStatusPrev</code>）；断线 1s 后自动重连。</li>
+        <li>每帧都会调用 <code>protocol.js</code> 的 <code>route_machine_status(global)</code>，按状态跳转（见下表）。</li>
       </ol>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>条件</th><th>跳转 / 行为</th></tr></thead>
+          <tbody>
+            <tr><td><code>server_state === 'SLEEP'</code></td><td>强制 <code>/sleep</code></td></tr>
+            <tr><td><code>server_state === 'FAILURE'</code></td><td>强制 <code>/error</code>（10s 收不到控制板 <code>~STATUS</code> 就会进入）</td></tr>
+            <tr><td><code>system_state === 'ERROR'</code></td><td><code>/error?error_name=…</code>（按错误码映射 overheat / gripper / emo…）</td></tr>
+            <tr><td><code>system_state === 'RESET'</code></td><td><code>/qrcode</code>（激活页；在 <code>/init</code> 或 <code>route_exclude</code> 时不跳）</td></tr>
+            <tr><td><code>system_state === 'PRECOOK'</code></td><td>cook 阶段 1 → <code>/cook/prepare</code>；阶段 2 → <code>/cook/cooking</code></td></tr>
+            <tr><td><code>system_state === 'COOK'</code></td><td><code>/cook/cooking</code></td></tr>
+            <tr><td><code>system_state === 'IDLE'</code></td><td><strong>仅当</strong>当前在 <code>/cook*</code> 时回 <code>/home</code>（从启动页 <code>/</code> 不会自动进首页）</td></tr>
+            <tr><td><code>alert_id !== -1</code></td><td>按 <code>alert_id_to_popup_name</code> 弹窗；<code>-1</code> = 无报警</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>例外名单 <code>route_exclude</code>：<code>/backend</code>、<code>/settings/general</code>、<code>/settings/factorysettings</code> 不会被强制跳走。</p>
       <div class="note warn">
-        <b>调试开关</b>
-        改新页面/新 App Library 条目时，如果被状态跳来跳去，先把 <code>settings.disable_route_status = true</code>（浏览器里按 Enter 键也会切回旧 IP + 打开这个开关，见 <code>App.vue</code> 的 keypress 监听）。
+        <b>无硬件 / 本地调试时的三个连锁反应</b>
+        ① 没有 <code>~STATUS</code> → 10s 后 <code>FAILURE</code>，页面被拉到 <code>/error</code>；<br>
+        ② 启动页 <code>/</code> 不会自己前进，必须靠 <code>RESET → /qrcode → 激活(INIT) → /init → /home</code> 这条链路，本地模拟器因此开机就发 <code>RESET</code>；<br>
+        ③ 想自由跳页面：把 <code>settings.mjs</code> 的 <code>disable_route_status</code> 打开（<code>App.vue</code> 里按 Enter 也会开，但同时会把 API IP 切回固定地址，谨慎用）。
       </div>
 
       <h3 id="mcui-routes">2.3 路由 / 页面 / i18n / 样式</h3>
@@ -454,6 +468,84 @@ mc-ui  构建：vite build → ui/ → zip → <span class="str">tmp/ui.zip</spa
         <code>upload_to_az.mjs</code> 会检查：若 <code>custom_server_origin</code> 或 <code>disable_route_status</code> 不是默认值，<strong>直接退出不上传</strong>（防止把调试配置发到产线）。两个仓库的版本号（<code>mc-ui/src/settings.mjs</code> 与 <code>mc-api/version.js</code>）当前都是 <code>6.0.8.0</code>，发布时要一起改。
       </div>
     </section>
+
+      <h3 id="mcapi-proto">3.4 控制板协议（串口帧与 <code>~</code> 响应）</h3>
+      <p class="lead" style="margin-left:0">mc-api 与控制板（PIC32）跑一条"下行定长帧 + 上行文本行"的协议，串口是 <code>/dev/ttyS9</code>，桥接程序是 <code>bin/serialcom</code>。看懂它，就知道本地模拟器在演什么。</p>
+      <div class="grid2">
+        <div class="mini-card">
+          <h4>下行：命令帧（mc-api → 控制板）</h4>
+          <pre style="margin:8px 0"><span class="cmt">// 普通命令：定长 52B</span>
+"COOK 1\n"  → NUL 填充到 50B  → 2B CRC16</pre>
+          <p>文件下发另走分块：每块 ≤1024B + 2B CRC，由 100Hz 的 <code>serial_buffer</code> 排队发送。</p>
+        </div>
+        <div class="mini-card">
+          <h4>上行：<code>~</code> 文本行（控制板 → mc-api）</h4>
+          <pre style="margin:8px 0">~STATUS: {"status":"IDLE","sys":"IDLE",
+  "alert":-1,"temperature":25,"cook":0,...}
+~CMD: OK
+~ORDER: 12
+~PREPINFO: 0 1 1 1 1 1 1 1 0
+~COOKINFO: 0 (POURBOXF) (WOKTEMP 180) 1 3 60 180
+~INIT: 127 127</pre>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>响应</th><th>作用 / 对应代码</th></tr></thead>
+          <tbody>
+            <tr><td><code>~STATUS: {json}</code></td><td>1Hz 心跳 + 状态源。<code>parse_status()</code> 只取：<code>status</code>（IDLE/BUSY → online）、<code>sys</code>（→ system_state）、<code>alert</code>（→ alert_id，<strong>-1 = 无报警</strong>）、<code>temperature/target/heating</code>、<code>cook</code>（0 空闲 / 1~3 阶段）、<code>motion</code>（运动位图）。10s 没有 → <code>FAILURE</code>。</td></tr>
+            <tr><td><code>~CMD: OK / RESEND / ABORT</code></td><td>普通命令的完成 / 要求重发 / 中止应答，用于清 <code>cmd_in_progress</code>。</td></tr>
+            <tr><td><code>~UPLOADF: START / CHUNK / RESEND / ABORT</code></td><td>文件上传握手：START 开始、每收一块回 CHUNK、块发完即结束。</td></tr>
+            <tr><td><code>~ORDER: &lt;id&gt;</code></td><td>写 <code>MachineStatus.cook.id</code>，UI 用它对齐选中的菜谱。</td></tr>
+            <tr><td><code>~PREPINFO: mode b1…b7 taken</code></td><td>备菜模式 + 7 个料盒状态。</td></tr>
+            <tr><td><code>~COOKINFO: mode (cur) (next) step total remain totalSec</code></td><td>烹饪进度：当前/下一步动作、第几步、剩余秒（烹饪页圆环与"下一步操作"）。</td></tr>
+            <tr><td><code>~INIT: flag mask</code></td><td>自检位图；<code>(flag &amp; mask) === mask</code> 时 <code>Init.vue</code> 跳 <code>/home</code>。</td></tr>
+            <tr><td><code>~DEADBEEF</code></td><td>控制板重启握手；非首次出现 → <code>FAILURE / Controller Unexpectedly Restarted</code>。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note info">
+        <b>做菜时其实发生了两次"下发"</b>
+        <code>COOK &lt;recipeId&gt;</code> 先在 <code>menu/machine/</code> 找对应菜谱（文件名形如 <code>1_1_v1.json</code>，须含 <code>id/version/uuid</code>），复制成 <code>tmp/recipe.json</code>，走 <code>UPLOADF</code> 分块上传并逐块等应答；文件传完才把 <code>COOK</code> 命令真的发给控制板。
+      </div>
+
+      <h3 id="mcapi-flows">3.5 运行时全链路（启动 / 做菜 / 睡眠 / 重启）</h3>
+      <p>把 §2.2 的跳转规则和 §3.4 的协议连起来，就是机器的四条主干流程；本地模拟器就是照这四条演的。</p>
+
+      <h4>① 开机 → 激活 → 首页</h4>
+      <div class="flow">
+        <div class="frow"><div class="fbox blue"><b>开机</b><span>systemd 拉起 mc-api</span></div>
+          <div class="farrow" style="align-self:center">→</div>
+          <div class="fbox green"><b>控制板 RESET</b><span>~STATUS sys=RESET</span></div>
+          <div class="farrow" style="align-self:center">→</div>
+          <div class="fbox purple"><b>UI /qrcode</b><span>激活页</span></div></div>
+        <div class="farrow">▼ <small>点"激活" → send_cmd('INIT') → ~INIT: 127 127 → Init.vue 轮询到完成</small></div>
+        <div class="frow"><div class="fbox purple"><b>UI /init → /home</b><span>7 项自检全绿</span></div></div>
+      </div>
+      <p class="mock-caption" style="text-align:left">注：<code>require('./src/Serial')</code> 时就会 <code>start_serial()</code>（board_disable/enable → spawn serialcom），所以 API 一起来串口就开始工作。</p>
+
+      <h4>② 做菜（菜单 → 烹饪）</h4>
+      <div class="flow">
+        <div class="frow"><div class="fbox purple"><b>/menu → /menu/recipes</b><span>选菜谱</span></div>
+          <div class="farrow" style="align-self:center">→</div>
+          <div class="fbox orange"><b>COOK &lt;id&gt;</b><span>/machine/cmd?cmd=COOK…</span></div>
+          <div class="farrow" style="align-self:center">→</div>
+          <div class="fbox green"><b>UPLOADF → ~ORDER</b><span>上传菜谱 + 设置 id</span></div></div>
+        <div class="farrow">▼ <small>PRECOOK 1 → 2 → COOK；UI 依次在 /cook/prepare、/cook/cooking（~COOKINFO 每秒更新）</small></div>
+        <div class="frow"><div class="fbox purple"><b>回 /home</b><span>sys=IDLE 且当前在 /cook*</span></div></div>
+      </div>
+
+      <h4>③ 睡眠 / 唤醒</h4>
+      <ul>
+        <li><strong>睡眠</strong>：<code>GET /machine/sleep</code> → <code>server_state=SLEEP</code>、亮度 20、<code>board_disable.sh</code> → UI 强制 <code>/sleep</code>。</li>
+        <li><strong>唤醒</strong>：<code>GET /machine/wake</code> → 亮度 100、<code>board_enable.sh</code>、重建 <code>MachineStatus</code> → UI 恢复；按钮同时 <code>push('/')</code>。</li>
+      </ul>
+
+      <h4>④ 重启</h4>
+      <ul>
+        <li><code>GET /machine/restart</code> → <code>service_restart.sh</code> → <code>systemctl restart multicooker</code>：API 进程被 systemd 重启，浏览器端 WS 断线 1s 后重连。</li>
+        <li>UI 侧 <code>global.restart()</code> 还会 <code>push('/start')</code> —— 这条路由<strong>不存在</strong>（只有 <code>/</code>），会落在空白页；详见 §7。</li>
+      </ul>
 
     <!-- ======================= 4 ======================= -->
     <section id="applib">
@@ -573,44 +665,61 @@ mc-ui  构建：vite build → ui/ → zip → <span class="str">tmp/ui.zip</spa
 
     <!-- ======================= 5 ======================= -->
     <section id="dev">
-      <h2><span class="num">5</span>本地开发与发布</h2>
-      <p class="lead">两台服务 + 一个浏览器，就能联调大部分 UI（除硬件动作）。</p>
+      <h2><span class="num">5</span>本地开发（mise + 模拟器）与发布</h2>
+      <p class="lead">不接硬件，也能把"启动 → 激活 → 做菜 → 睡眠 → 重启"整条链路跑起来。细节见 <code>~/repos/onboarding/mc.md</code>。</p>
 
-      <pre><span class="cmt"># ---------- mc-api（后端，需 Node） ----------</span>
-cd ~/repos/mc-api
-npm install
-npm start                    <span class="cmt"># :3000；首次运行自动生成 settings.json</span>
-                             <span class="cmt"># 默认 machine_name=CM1、remote_broker_ip=10.93.2.233、串口 /dev/ttyS9</span>
+      <pre><span class="cmt"># ---------- 一次性准备（mock 配置在 onboarding 仓库，符号链接进两个 repo） ----------</span>
+git clone git@github.com:kai-hestia/onboarding.git ~/repos/onboarding
+ln -s ../onboarding/mc-api.toml ~/repos/mc-api/mise.local.toml
+ln -s ../onboarding/mc-ui.toml  ~/repos/mc-ui/mise.local.toml
+cd ~/repos/mc-api && mise trust && npm ci   <span class="cmt"># 用 npm ci，npm install 会顺手改 lockfile</span>
+cd ~/repos/mc-ui  && mise trust && npm ci
 
-<span class="cmt"># ---------- mc-ui（前端） ----------</span>
-cd ~/repos/mc-ui
-npm install
-npm run dev                  <span class="cmt"># :3001，vite</span>
-<span class="cmt"># 联调：把 src/settings.mjs 改为</span>
-<span class="cmt">#   custom_server_origin: true</span>
-<span class="cmt">#   api_server_ip: '&lt;mc-api 所在机器 IP&gt;'</span>
-<span class="cmt"># 或直接访问 http://&lt;mc-api 机器&gt;:3000/（走 mc-api 托管的构建产物）</span>
+<span class="cmt"># ---------- 日常：一条命令搞定两个 pane（tmux 会话 mc / 窗口 mc-ui-api） ----------</span>
+mcdev                                       <span class="cmt"># 存在就复用，不存在就创建+分屏；见 onboarding/mc.md</span>
+<span class="cmt"># 或手动分别启动：</span>
+cd ~/repos/mc-api && mise run dev           <span class="cmt"># :3000，ncc 打包 + 模拟控制板 + 崩溃自动重启</span>
+cd ~/repos/mc-ui  && mise run dev           <span class="cmt"># :3001，Vite</span>
 
-<span class="cmt"># ---------- 构建 / 发布 ----------</span>
-<span class="cmt"># mc-ui:  version 改 src/settings.mjs</span>
+<span class="cmt"># 浏览器：打开 http://localhost:3001</span>
+<span class="cmt"># DevTools → 设备模拟器选择 "mc"（800×1280 / DPR 1.5 / Touch，与机器屏幕一致）</span>
+
+<span class="cmt"># ---------- 构建 / 发布（与本地 mock 无关） ----------</span>
+<span class="cmt"># mc-ui: version 改 src/settings.mjs</span>
 npm run build && npm run upload          <span class="cmt"># 测试：v6/test/ui.zip</span>
 npm run build && npm run upload-release  <span class="cmt"># 发布：v6/ui.zip</span>
-<span class="cmt"># mc-api: version 改 version.js</span>
+<span class="cmt"># mc-api: version 改 version.js；npm run build = ncc → api/ → tmp/api.zip</span>
 npm run build && npm run upload
 
 <span class="cmt"># 需要 .env：AZURE_STORAGE_CONNECTION_STRING=...</span>
 <span class="cmt"># 机器端升级：访问 /update/updater 或用 /update/update?type=all[&amp;test=1]</span></pre>
 
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>本地 mock</th><th>顶替了什么</th></tr></thead>
+          <tbody>
+            <tr><td><code>ncc</code> 打包到 <code>api/</code></td><td>v6 源码 <code>npm start</code> 起不来（<code>Menu.js</code> 混用 CJS/ESM），产物与产线一致</td></tr>
+            <tr><td><code>api/bin/gpio</code></td><td>WiringPi 的 <code>gpio</code>（Pi 专属），board_disable/enable 直接成功</td></tr>
+            <tr><td><code>api/bin/systemctl</code></td><td><code>systemctl restart multicooker</code>：杀掉 API 进程让 watchdog 拉起，模拟 systemd</td></tr>
+            <tr><td><code>api/bin/brightness</code> / <code>pic32prog</code></td><td>两个 ARM 二进制（亮度、固件烧录），空操作/假进度，避免 unhandled rejection 把 API 打崩</td></tr>
+            <tr><td><code>api/bin/serialcom</code></td><td>整块控制板：RESET 开机、INIT、UPLOADF 握手、COOK 全流程、1Hz <code>~STATUS</code>（Node 脚本）</td></tr>
+            <tr><td><code>api/menu/…</code> + <code>api/tmp/</code></td><td>样例菜单/菜谱文件与做菜时的临时目录（真实机器上是产线数据）</td></tr>
+            <tr><td><code>api/settings.json</code> 补丁</td><td><code>machine_name=DEV</code>（不污染团队 MQTT 主题）、<code>disable_ui_clients_check=true</code>（没浏览器时别自杀）</td></tr>
+            <tr><td>watchdog 循环</td><td>等价 systemd 的 <code>Restart=always</code>：API 退出 2s 后自动拉起</td></tr>
+          </tbody>
+        </table>
+      </div>
+
       <div class="grid2">
         <div class="mini-card">
-          <h4>无硬件时怎么开发</h4>
-          <p>mc-api 没串口也能起，状态会停在 FAILURE/超时；调 UI 页面足够。菜单数据可手动往 <code>menu/</code> 里放 json（或调 <code>/menu/upload</code>）。</p>
-          <p>浏览器按 Enter 可以切换回固定 IP 并打开 <code>disable_route_status</code>（App.vue 里的调试快捷键）。</p>
+          <h4>为什么不是 <code>npm start</code></h4>
+          <p>v6 HEAD 的 <code>src/Menu.js</code> 顶部用 <code>require()</code>、底部却 <code>export</code>，任何 Node 版本都无法直接运行（新 Node 会当 ESM 加载，然后在 <code>require</code> 处报错）。ncc/webpack 能容忍这种混用，所以本地跟产线一样跑 bundle。</p>
+          <p>这也是上游 bug，值得单独修。</p>
         </div>
         <div class="mini-card">
           <h4>机器上的运行形态</h4>
-          <p>systemd <code>multicooker.service</code>：WorkingDirectory=<code>/multicooker</code>，ExecStart=<code>node ./index.js</code>，启动后跑 <code>ui_start.sh</code>（拉起 Chromium 全屏）。</p>
-          <p><code>UI.js</code> 每 15s 检查是否还有浏览器连着，没有就自动重启服务。</p>
+          <p>systemd <code>multicooker.service</code>：WorkingDirectory=<code>/multicooker</code>，ExecStart=<code>node ./index.js</code>；<code>ui_start.sh</code> 拉起 Chromium 全屏。</p>
+          <p><code>UI.js</code> 每 15s 检查有没有浏览器连着（没有就重启服务）；每 30s 检查触摸屏。</p>
         </div>
       </div>
     </section>
@@ -618,18 +727,47 @@ npm run build && npm run upload
     <!-- ======================= 6 ======================= -->
     <section id="reading">
       <h2><span class="num">6</span>建议阅读顺序</h2>
-      <p class="lead">按这个顺序读，一个下午能上手 App Library 的改动。</p>
+      <p class="lead">按这个顺序读，先建立"状态机 + 协议"的心智模型，再动 App Library。</p>
       <ol>
-        <li><code>mc-ui/src/components/general/AppsOverlay.vue</code> —— 你的主战场，先看 10 分钟</li>
-        <li><code>mc-ui/src/App.vue</code> —— Overlay 怎么挂、画布怎么居中</li>
-        <li><code>mc-ui/src/stores/GlobalProps.js</code> —— <code>show_apps</code> 与全局 UI 状态</li>
-        <li><code>mc-ui/src/main.js</code> —— 全局函数、WebSocket、settings 来源</li>
-        <li><code>mc-ui/src/protocol.js</code> —— 页面为什么会被"强行"跳走</li>
+        <li><code>~/repos/onboarding/mc.md</code> + <code>mc-api.toml</code> —— 本地怎么跑、每个 mock 顶替了什么</li>
+        <li><code>mc-ui/src/protocol.js</code> —— 状态驱动跳转（页面为什么会被"强行"带走）</li>
+        <li><code>mc-ui/src/components/general/AppsOverlay.vue</code> —— App Library 主战场</li>
+        <li><code>mc-ui/src/main.js</code> + <code>App.vue</code> —— 全局函数、WebSocket、Overlay 挂载、画布居中</li>
         <li><code>mc-ui/src/plugins/router.js</code> + <code>i18n.js</code> —— 路由与四语言文案</li>
-        <li><code>mc-api/index.js</code> → <code>src/Machine.js</code> —— 后端如何接收 <code>send_cmd</code> 与广播状态</li>
-        <li>（需要时）<code>mc-api/src/Menu.js</code> / <code>Settings.js</code> / <code>Update.js</code></li>
+        <li><code>mc-api/index.js</code> → <code>src/Machine.js</code> —— 串口协议、状态广播、sleep/wake/restart</li>
+        <li><code>mc-api/src/Menu.js</code> —— 菜单文件与做菜时的文件下发（<code>menu/machine/</code>）</li>
+        <li>（需要时）<code>Settings.js</code> / <code>Update.js</code> / <code>MQTT.js</code> / <code>Firmware.js</code></li>
       </ol>
       <footer class="foot">Multicooker (MC) onboarding 材料 · mc-ui + mc-api · 与 Hestia 全厨架构串讲配套使用</footer>
+    </section>
+
+    <!-- ======================= 7 ======================= -->
+    <section id="bugs">
+      <h2><span class="num">7</span>已知问题（上游 bug + 本地坑）</h2>
+      <p class="lead">改这两个仓库前先看这里，能省很多"以为是环境问题"的时间。</p>
+
+      <h3>上游 bug（值得报 / 值得修）</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>#</th><th>问题</th><th>影响 / 建议</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td><code>mc-api/src/Menu.js</code> 混用 CJS/ESM（commit <code>8344138</code>）</td><td>源码 <code>npm start</code> 在任何 Node 都起不来；改回 <code>module.exports</code> 或补全 ESM 迁移</td></tr>
+            <tr><td>2</td><td><code>mc-ui/src/main.js</code> <code>global.restart()</code> 里 <code>push('/start')</code></td><td>没有这条路由（只有 <code>/</code>）→ 落在空路由，页面全白，刷新仍是 <code>#/start</code>。建议改 <code>push('/')</code>，并让 <code>protocol.js</code> 的 IDLE 分支也把 <code>/</code> 送到 <code>/home</code></td></tr>
+            <tr><td>3</td><td><code>/machine/restart</code> 回调没有 try/catch</td><td><code>service_restart.sh</code> 失败时 unhandled rejection 直接杀掉 API；产线靠 systemd 兜底</td></tr>
+            <tr><td>4</td><td><code>protocol.js:135</code> 弹窗兜底用了未定义的 <code>global.$t</code></td><td>任何未映射的 <code>alert_id</code> 都会让 UI 抛 <code>TypeError</code>；建议改用 i18n 实例</td></tr>
+            <tr><td>5</td><td><code>mc-api/bin/*</code> 里几个脚本在 git 里是 <code>100644</code></td><td>开发机克隆后 <code>touch_check_alive.sh</code> 等 spawn 会 <code>EACCES</code> 把 API 打崩（Pi 上靠升级脚本 <code>chmod 755</code> 兜底）；建议 git 里补上可执行位</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>本地模拟环境的坑</h3>
+      <ul>
+        <li><strong>重启 / 睡眠唤醒后 UI 空白</strong>：都是上游 bug #2；本地模拟器会在 API 回来后发 <code>RESET</code>，把 UI 带到激活页。点一次"激活"即可回到首页。</li>
+        <li><strong>触摸 / 点击对不上</strong>：DevTools 设备模拟会把 800×1280 缩放到窗口大小，CDP 输入坐标要按缩放系数换算（本机约 1.0525）；用 <code>elementFromPoint</code> + 点击回声或 mousemove 探针校准。</li>
+        <li><strong>WSL ↔ Windows Chrome 桥掉线</strong>：<code>browser-harness</code> 报 unreachable 时运行 <code>~/.config/browser-harness/wsl-bridge/start_bridge.sh</code>。</li>
+        <li><strong>改动 mock 后要重启</strong>：<code>mise run build</code> 重新打包 <code>api/</code>；<code>mcdev</code> 或 pane 里 Ctrl+C + <code>mise run dev</code>。</li>
+        <li><strong>真实菜单数据</strong>：样例在 <code>api/menu/</code>，覆盖它们不会被 build 重置（只在缺失时生成）；也可以走 UI 的菜单上传。</li>
+      </ul>
     </section>
 
   </main>
