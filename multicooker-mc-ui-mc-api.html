@@ -47,6 +47,27 @@
     font-size: 13.5px;
   }
   nav.toc .toc-title { font-weight: 700; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
+
+  /* ---- collapsible TOC ---- */
+  .toc-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+  .toc-head .toc-title { margin-bottom: 0; }
+  #tocToggle {
+    border: 1px solid var(--border); background: #fff; color: var(--muted);
+    border-radius: 6px; width: 24px; height: 24px; padding: 0; line-height: 1;
+    font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  }
+  #tocToggle:hover { color: var(--accent); border-color: #c7dbff; background: var(--accent-soft); }
+  body.toc-hidden nav.toc { display: none; }
+  body.toc-hidden .layout { max-width: 1000px; }
+  #tocShow {
+    position: fixed; left: 18px; top: 18px; z-index: 60;
+    display: none; align-items: center; gap: 6px;
+    padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border);
+    background: #fff; color: #475467; font-size: 13px; cursor: pointer; box-shadow: var(--shadow);
+  }
+  #tocShow:hover { color: var(--accent); border-color: #c7dbff; background: var(--accent-soft); }
+  body.toc-hidden #tocShow { display: inline-flex; }
+
   nav.toc a {
     display: block; padding: 5px 12px; color: #475467; text-decoration: none;
     border-left: 2px solid transparent; border-radius: 0 6px 6px 0;
@@ -193,7 +214,10 @@
 <div class="layout">
 
   <nav class="toc" id="toc">
-    <div class="toc-title">目录</div>
+    <div class="toc-head">
+      <div class="toc-title">目录</div>
+      <button id="tocToggle" title="收起目录" aria-label="收起目录">‹</button>
+    </div>
     <div class="toc-body">
       <a href="#overview">0 · 速览：两个仓库是什么</a>
       <a href="#arch">1 · mc-ui ↔ mc-api 架构</a>
@@ -773,6 +797,7 @@ npm run build && npm run upload
   </main>
 </div>
 
+<button id="tocShow" title="展开目录" aria-label="展开目录">☰ 目录</button>
 <button id="toTop" title="回到顶部">↑</button>
 
 <script>
@@ -798,6 +823,22 @@ npm run build && npm run upload
     btn.style.display = window.scrollY > 400 ? 'block' : 'none';
   });
   btn.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+
+  // 可折叠目录（状态记忆；快捷键 t 切换）
+  const tocToggle = document.getElementById('tocToggle');
+  const tocShow = document.getElementById('tocShow');
+  const setToc = (hidden) => {
+    document.body.classList.toggle('toc-hidden', hidden);
+    try { localStorage.setItem('mcDocTocHidden', hidden ? '1' : '0'); } catch (e) {}
+  };
+  tocToggle.addEventListener('click', () => setToc(true));
+  tocShow.addEventListener('click', () => setToc(false));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 't' && !/input|textarea|select/i.test(e.target.tagName)) {
+      setToc(!document.body.classList.contains('toc-hidden'));
+    }
+  });
+  try { if (localStorage.getItem('mcDocTocHidden') === '1') setToc(true); } catch (e) {}
 </script>
 
 </body>
