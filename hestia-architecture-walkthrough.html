@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hestia 全厨架构串讲 · 从 larder-api 出发</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --panel: #ffffff;
+    --fg: #1f2430;
+    --muted: #667085;
+    --border: #e4e7ec;
+    --accent: #0f6fff;
+    --accent-soft: #eaf2ff;
+    --green: #0e9f6e;
+    --green-soft: #e6f6f0;
+    --orange: #d97706;
+    --orange-soft: #fdf3e3;
+    --purple: #7c3aed;
+    --purple-soft: #f3edff;
+    --red: #dc2626;
+    --red-soft: #fdecec;
+    --code-bg: #0f172a;
+    --code-fg: #e2e8f0;
+    --radius: 12px;
+    --shadow: 0 1px 3px rgba(16,24,40,.06), 0 1px 2px rgba(16,24,40,.04);
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+    font-size: 15px;
+    line-height: 1.75;
+  }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; }
+
+  /* ---------- Layout ---------- */
+  .layout { display: flex; max-width: 1280px; margin: 0 auto; padding: 0 24px 80px; gap: 32px; }
+  nav.toc {
+    width: 240px; flex: 0 0 240px;
+    position: sticky; top: 0; align-self: flex-start;
+    max-height: 100vh; overflow-y: auto;
+    padding: 28px 0 40px;
+    font-size: 13.5px;
+  }
+  nav.toc .toc-title { font-weight: 700; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
+  nav.toc a {
+    display: block; padding: 5px 12px; color: #475467; text-decoration: none;
+    border-left: 2px solid transparent; border-radius: 0 6px 6px 0;
+  }
+  nav.toc a:hover { color: var(--accent); background: var(--accent-soft); }
+  nav.toc a.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+  nav.toc a.sub { padding-left: 24px; font-size: 12.5px; }
+  main { flex: 1 1 auto; min-width: 0; padding-top: 8px; }
+
+  /* ---------- Hero ---------- */
+  header.hero {
+    background: linear-gradient(135deg, #0b2545 0%, #123f77 55%, #0f6fff 130%);
+    color: #fff; border-radius: var(--radius); padding: 34px 36px; margin: 24px 0 28px;
+    box-shadow: 0 10px 30px rgba(15,111,255,.18);
+  }
+  header.hero h1 { margin: 0 0 8px; font-size: 26px; line-height: 1.35; letter-spacing: .01em; }
+  header.hero p { margin: 0; color: #cfe0ff; font-size: 14.5px; }
+  header.hero .chips { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+  header.hero .chip { background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.25); padding: 3px 10px; border-radius: 999px; font-size: 12.5px; }
+
+  /* ---------- Cards / sections ---------- */
+  section {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 28px 32px; margin-bottom: 24px; box-shadow: var(--shadow);
+    scroll-margin-top: 16px;
+  }
+  section > h2 {
+    margin: 0 0 6px; font-size: 21px; letter-spacing: .01em;
+    display: flex; align-items: center; gap: 10px;
+  }
+  section > h2 .num {
+    flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; border-radius: 8px; background: var(--accent); color: #fff;
+    font-size: 14px; font-weight: 700;
+  }
+  section > .lead { color: var(--muted); margin: 0 0 18px 38px; font-size: 14px; }
+  h3 { font-size: 16.5px; margin: 26px 0 10px; }
+  h3::before { content: ""; display: inline-block; width: 4px; height: 14px; background: var(--accent); border-radius: 2px; margin-right: 8px; vertical-align: -1px; }
+  p { margin: 8px 0; }
+  ul, ol { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  a { color: var(--accent); }
+  strong { font-weight: 650; }
+
+  /* ---------- Tables ---------- */
+  .table-wrap { overflow-x: auto; margin: 12px 0; border: 1px solid var(--border); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 560px; }
+  th { background: #f2f5f9; text-align: left; padding: 10px 14px; font-weight: 650; color: #344054; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 9px 14px; border-bottom: 1px solid #eef1f5; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #fafbfc; }
+  td code, p code, li code { background: #f0f3f7; border: 1px solid #e3e8ef; padding: 1px 6px; border-radius: 6px; font-size: 12.5px; color: #334155; white-space: nowrap; }
+
+  /* ---------- Code blocks ---------- */
+  pre {
+    background: var(--code-bg); color: var(--code-fg); border-radius: 10px;
+    padding: 16px 18px; overflow-x: auto; font-size: 12.8px; line-height: 1.65;
+    margin: 12px 0;
+  }
+  pre .cmt { color: #7d8da6; }
+  pre .hl { color: #7dd3fc; }
+  pre .str { color: #a5d6a7; }
+
+  /* ---------- Callouts ---------- */
+  .note { border-radius: 10px; padding: 12px 16px; margin: 14px 0; font-size: 13.5px; border: 1px solid; }
+  .note.info { background: var(--accent-soft); border-color: #c7dbff; }
+  .note.warn { background: var(--orange-soft); border-color: #f3d9a4; }
+  .note.danger { background: var(--red-soft); border-color: #f5b5b5; }
+  .note b { display: block; margin-bottom: 2px; }
+  .note.info b { color: #0b56c4; } .note.warn b { color: #b45309; } .note.danger b { color: #b91c1c; }
+
+  /* ---------- Flow diagrams ---------- */
+  .flow { display: flex; flex-direction: column; align-items: stretch; gap: 0; margin: 16px 0; }
+  .frow { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; align-items: stretch; }
+  .fbox {
+    border: 1px solid var(--border); background: #fff; border-radius: 10px;
+    padding: 8px 14px; font-size: 12.8px; text-align: center; min-width: 120px;
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  .fbox b { display: block; font-size: 13px; }
+  .fbox span { color: var(--muted); font-size: 11.5px; }
+  .fbox.blue { background: var(--accent-soft); border-color: #c7dbff; }
+  .fbox.green { background: var(--green-soft); border-color: #bfe8d8; }
+  .fbox.orange { background: var(--orange-soft); border-color: #f3d9a4; }
+  .fbox.purple { background: var(--purple-soft); border-color: #ddd0f7; }
+  .fbox.red { background: var(--red-soft); border-color: #f5b5b5; }
+  .fbox.gray { background: #f2f4f7; color: #475467; }
+  .farrow { text-align: center; color: var(--muted); font-size: 16px; line-height: 1.2; padding: 2px 0; }
+  .farrow small { display: block; font-size: 11px; color: #98a2b3; letter-spacing: .03em; }
+  .fgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 12px 0; }
+  .fgrid .fbox { min-width: 0; }
+
+  /* ---------- Legend pills ---------- */
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .pill.blue { background: var(--accent-soft); border-color: #c7dbff; color: #0b56c4; }
+  .pill.green { background: var(--green-soft); border-color: #bfe8d8; color: #067a54; }
+  .pill.orange { background: var(--orange-soft); border-color: #f3d9a4; color: #b45309; }
+  .pill.purple { background: var(--purple-soft); border-color: #ddd0f7; color: #6d28d9; }
+  .pill.red { background: var(--red-soft); border-color: #f5b5b5; color: #b91c1c; }
+  .pill.gray { background: #f2f4f7; border-color: #e4e7ec; color: #475467; }
+
+  /* ---------- Misc ---------- */
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .mini-card { border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; background: #fcfcfd; }
+  .mini-card h4 { margin: 0 0 6px; font-size: 14px; }
+  .mini-card p { margin: 4px 0; font-size: 13px; color: #475467; }
+  .kv { font-size: 13.5px; }
+  .kv div { display: flex; gap: 8px; padding: 3px 0; }
+  .kv .k { flex: 0 0 130px; color: var(--muted); }
+  footer.foot { color: var(--muted); font-size: 12.5px; text-align: center; margin-top: 8px; }
+  #toTop {
+    position: fixed; right: 26px; bottom: 26px; width: 40px; height: 40px; border-radius: 50%;
+    border: 1px solid var(--border); background: #fff; color: var(--accent); font-size: 18px;
+    cursor: pointer; box-shadow: var(--shadow); display: none;
+  }
+  #toTop:hover { background: var(--accent-soft); }
+
+  @media (max-width: 980px) {
+    .layout { flex-direction: column; padding: 0 14px 60px; gap: 0; }
+    nav.toc { position: static; width: auto; max-height: none; padding: 16px 0 0; }
+    nav.toc .toc-body { display: flex; flex-wrap: wrap; gap: 2px; }
+    nav.toc a { border-left: none; border-radius: 8px; padding: 4px 10px; }
+    nav.toc a.sub { display: none; }
+    section { padding: 20px 18px; }
+    section > .lead { margin-left: 0; }
+    header.hero { padding: 24px 20px; }
+    .grid2 { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="layout">
+
+  <nav class="toc" id="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc-body">
+      <a href="#overview">0 · 速览 TL;DR</a>
+      <a href="#coords">1 · 坐标系：三层架构</a>
+      <a href="#larder-api">2 · larder-api 详解（起点）</a>
+      <a class="sub" href="#larder-ports">2.1 一个进程，三个身份</a>
+      <a class="sub" href="#larder-boot">2.2 启动流程</a>
+      <a class="sub" href="#larder-dirs">2.3 目录职责</a>
+      <a class="sub" href="#larder-http">2.4 对 UI：REST + SSE</a>
+      <a class="sub" href="#larder-grpc">2.5 对上游：gRPC srcomm</a>
+      <a class="sub" href="#larder-sync">2.6 配方 / 库存同步</a>
+      <a href="#larder-ui">3 · larder-ui（前端）</a>
+      <a href="#neighbors">4 · 周边服务串讲</a>
+      <a class="sub" href="#onsite">4.1 门店 Roboserver</a>
+      <a class="sub" href="#cloud">4.2 云端</a>
+      <a href="#flows">5 · 三条业务链路</a>
+      <a href="#dev">6 · 本地联调起手式</a>
+      <a href="#risks">7 · 风险与注意事项</a>
+      <a href="#reading">8 · 建议阅读顺序</a>
+    </div>
+  </nav>
+
+  <main>
+
+    <header class="hero">
+      <h1>Hestia 全厨架构串讲<br>从 <span class="mono">larder-api</span> 出发</h1>
+      <p>新人 onboarding · 聚焦 Web 前后端与上下游服务 · 硬件/STM32 仅讲接口边界</p>
+      <div class="chips">
+        <span class="chip">larder-api</span>
+        <span class="chip">larder-ui</span>
+        <span class="chip">hcms</span>
+        <span class="chip">hcsui-gw</span>
+        <span class="chip">eats-gw</span>
+        <span class="chip">recipe-updater</span>
+        <span class="chip">recipes-api-v2</span>
+      </div>
+    </header>
+
+    <!-- ======================= 0 ======================= -->
+    <section id="overview">
+      <h2><span class="num">0</span>速览 TL;DR</h2>
+      <p class="lead">30 秒建立心智模型，后面每节再展开。</p>
+      <ul>
+        <li>整个系统是 <strong>云 → 门店 Roboserver → 机器</strong> 三层。真正在做菜的是机器，指挥做菜的是门店的 <code>hcms</code>，接单的是 <code>eats-gw</code>，配方从云端一路同步下来。</li>
+        <li><strong>larder-api 是 Larder 柜机这一台的本地后端</strong>：对 UI 提供 REST + SSE，对上游（hcms / hcsui-gw）提供 gRPC，对下通过 MQTT 指挥控制器（硬件略）。</li>
+        <li><strong>larder-ui 是一套 Vue 3 + Vite 的触屏前端</strong>，构建产物被 larder-api 以 <code>/ui</code> 路径托管，前后端同机部署。</li>
+        <li>Dispenser 和 MC1~3 是<strong>同构的另外两套机器</strong>（sauce-dispenser-api/ui、mc-api/mc-ui）。吃透 Larder 一套，另外两套触类旁通。</li>
+      </ul>
+      <div class="note info">
+        <b>看图口诀</b>
+        橙色虚线框 = 机器内部三件套（ui / api / controller）；中间的 Roboserver 框 = 门店大脑与集成层；最上方 = 云端；右下 = 可观测性（Datadog）。
+      </div>
+    </section>
+
+    <!-- ======================= 1 ======================= -->
+    <section id="coords">
+      <h2><span class="num">1</span>坐标系：三层架构</h2>
+      <p class="lead">图上的节点按职责分层，先把每层"谁负责什么"钉死。</p>
+
+      <div class="flow">
+        <div class="frow">
+          <div class="fbox blue"><b>recipes-api-v2</b><span>Cloudflare Worker · 配方 REST</span></div>
+          <div class="fbox gray"><b>MongoDB Atlas</b><span>云端多租户数据</span></div>
+          <div class="fbox gray"><b>Azure IoT Central</b><span>设备管理 / slot 下发</span></div>
+          <div class="fbox red"><b>Stytch</b><span>鉴权</span></div>
+          <div class="fbox gray"><b>eats365 · Square · menuSifu</b><span>外部订单源</span></div>
+        </div>
+        <div class="farrow">▼ <small>配方同步 / 订单下发 / 设备管理</small></div>
+        <div class="fbox orange" style="align-self:center; min-width: 78%;"><b>门店 Roboserver（edge PC）</b>
+          <span>iotcbridge · recipe-updater · eats-gw · square-gw · hcms · hcsui · hcsui-gw · datadog-agent · mongodb · mosquitto</span>
+        </div>
+        <div class="farrow">▼ <small>gRPC :40050（Larder） ／ MQTT :1883（Dispenser、MC、传送带）</small></div>
+        <div class="fgrid">
+          <div class="fbox green"><b>Larder 柜机</b><span>larder-api + larder-ui + larder-control</span></div>
+          <div class="fbox green"><b>Dispenser 酱料机</b><span>sauce-dispenser-api + ui + control</span></div>
+          <div class="fbox green"><b>MC 1 · 2 · 3</b><span>mc-api + mc-ui（多锅炒制）</span></div>
+        </div>
+      </div>
+
+      <p class="note info"><b>关键认知</b>每台机器都是"自带 API + UI + 控制器"的小系统，机器之间不直接互相调用，一切编排都经过门店的 hcms。</p>
+    </section>
+
+    <!-- ======================= 2 ======================= -->
+    <section id="larder-api">
+      <h2><span class="num">2</span>larder-api 详解（起点）</h2>
+      <p class="lead">
+        仓库 <code>github.com/Hestia-Technology/larder-api</code> · Go 1.23 + Gin + Viper + logrus + paho-mqtt + gRPC<br>
+        沟通依赖：<code>hcms-core</code>（gRPC proto / 日志 / 配置）、<code>sauce-dispenser-api/v6</code>（MQTT handler）。
+      </p>
+
+      <h3 id="larder-ports">2.1 一个进程，三个身份</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>端口 / 通道</th><th>身份</th><th>说明</th><th>代码入口</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><span class="pill blue">HTTP :3000</span></td>
+              <td>UI 后端 + 静态托管</td>
+              <td>REST / SSE 给 larder-ui；同时托管 <code>/ui</code>（来自 <code>~/larder-api/ui</code>）</td>
+              <td><code>cmd/ldapi/ldapi.go</code> → <code>internal/endpoints/routes.go</code></td>
+            </tr>
+            <tr>
+              <td><span class="pill green">gRPC :40050</span></td>
+              <td>机器控制接口</td>
+              <td>实现 <code>srcomm</code> 服务，被 <strong>hcms</strong> 与 <strong>hcsui-gw</strong> 调用：拣货 / 出餐 / 库存 / 状态</td>
+              <td><code>internal/grpcservice/grpc.go</code></td>
+            </tr>
+            <tr>
+              <td><span class="pill orange">MQTT 双向</span></td>
+              <td>控制器通信</td>
+              <td>下发 <code>/larder/api/cmd/</code>，上报 <code>/larder/ctrl/cmd/</code>；对面是 larder-control 的 C++ 状态机（硬件略）</td>
+              <td><code>internal/models/controller_comm.go</code></td>
+            </tr>
+            <tr>
+              <td><span class="pill purple">TCP :23336</span></td>
+              <td>日志上报</td>
+              <td>logrus hook 把 JSON 日志推到本机 datadog-agent（<code>rf.d/conf.yaml</code> 中 type: tcp）</td>
+              <td><code>internal/logger/socket_hook.go</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="larder-boot">2.2 启动流程</h3>
+      <pre><span class="cmt">// cmd/ldapi/ldapi.go（伪代码梳理）</span>
+读 config.yaml（viper）
+ → log 初始化 + SocketHook（日志转发）+ goroutineID hook
+ → patches.hotFix()               <span class="cmt">// 按日期打的老机器兼容补丁</span>
+ → stacks.InitInventory()         <span class="cmt">// 读 configs/stacksInfo.json（84 格库存）</span>
+ → models.InitControllerComm()    <span class="cmt">// 建立 MQTT 连接</span>
+ → models.InitRequestManager()    <span class="cmt">// MQTT 请求/响应配对（发命令等状态回包）</span>
+ → FatalMsgManager / ServiceUpdateLogger
+ → stacks.InitPositionMap()       <span class="cmt">// 读 configs/positionsInfo.json（XY 坐标）</span>
+ → go initRouter()                <span class="cmt">// Gin :3000，托管 ~/larder-api/ui</span>
+ → initGrpcServer()               <span class="hl">// :40050 srcomm 服务</span></pre>
+
+      <h3 id="larder-dirs">2.3 目录职责（按阅读顺序）</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>目录</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>internal/endpoints/</code></td>
+              <td>HTTP 路由。<code>stack.go</code> 库存（quantity / sku / boxName / setMultipleQuantity / quantitySse / sync）；<code>cook.go</code> 拣货出餐 SSE 与测试接口；<code>setting.go</code> 参数/电机/位置；<code>machine_setting.go</code> SN、激活、patch；<code>network.go</code> 网络与 broker；<code>pi_control.go</code> 重启、EMO、恢复；<code>service_update.go</code> 自升级；<code>ultest.go</code> 老化测试</td></tr>
+            <tr><td><code>internal/models/</code></td>
+              <td>核心：<code>controller_comm.go</code>（FSM 状态枚举）、<code>hcms_comm.go</code>（订单队列 + PickPlace/Deliver 编排）、<code>factory_comm.go</code>（工厂/调试手动控制）、<code>request_manager.go</code>、<code>order_manager.go</code>、<code>sse_manager.go</code>、<code>io_data_manager.go</code>、<code>fatal_msg_manager.go</code></td></tr>
+            <tr><td><code>internal/stacks/</code></td>
+              <td><code>inventory.go</code> 库存位图 + <code>position.go</code> 坐标。注意 <strong>stackId 行列转换</strong>：14×6 网格，<code>ConvertStackIdFromRowToColumn</code>（输入 1→1，2→15）</td></tr>
+            <tr><td><code>internal/grpcservice/</code></td>
+              <td><code>srcomm</code> 实现：<code>GetSystemInfo / PickPlace / Deliver / StacksQuery / StacksUpdate / GetState / OnlineRequest / Cancel</code></td></tr>
+            <tr><td><code>internal/settings/</code></td>
+              <td><code>machine_setting.json</code>（是否用切刀、温度单位、<strong>版本号</strong>、SN）、flags、networks、viper 封装</td></tr>
+            <tr><td><code>internal/patches/</code></td>
+              <td>带日期的热修（旧机器升级兼容），如强制开启 UseCutter</td></tr>
+            <tr><td><code>configs/</code></td>
+              <td><code>config.yaml</code>（端口、MQTT topic、更新源等）＋ <code>stacksInfo.json</code>（库存/产品）＋ <code>positionsInfo.json</code>（坐标）</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="larder-http">2.4 对 UI：REST + SSE</h3>
+      <p>前端同学重点是下面这些。SSE（Server-Sent Events）是这套 UI 实时性的全部来源。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>分组</th><th>接口</th><th>用途</th></tr></thead>
+          <tbody>
+            <tr><td>库存</td><td><code>/inventory/*</code>、<code>/stack/*</code></td><td>quantity、sku、boxName、setMultipleQuantity、sync / upload</td></tr>
+            <tr><td>实时（SSE）</td><td><code>/inventory/quantitySse</code></td><td>库存变化推送</td></tr>
+            <tr><td>实时（SSE）</td><td><code>/cook/gripperSse</code> · <code>/cook/deliverySse</code></td><td>拣货 / 出餐订单状态</td></tr>
+            <tr><td>实时（SSE）</td><td><code>/setting/emoSse</code></td><td>急停、温度、门开、API 重启通知（事件名：state / initialState / temperature / doorsOpen / apiResetNotify）</td></tr>
+            <tr><td>实时（SSE）</td><td><code>/setting/motorStatusSse</code> · <code>/setting/pickplaceSse</code> · <code>/machineSetting/activateSse</code></td><td>电机状态、拣货状态、激活进度</td></tr>
+            <tr><td>设置</td><td><code>/setting/*</code>、<code>/machineSetting/*</code>、<code>/setting/network/*</code></td><td>参数、电机、位置、网络、软件升级、老化测试</td></tr>
+            <tr><td>静态</td><td><code>/ui</code> ← <code>~/larder-api/ui</code></td><td><code>index.html</code> 强制不缓存，<code>/ui/assets/*</code> 强缓存 1 年（避免旧入口缓存）</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="larder-grpc">2.5 对上游：gRPC srcomm</h3>
+      <ul>
+        <li>调用方是 <strong>hcms</strong>（调度脑）与 <strong>hcsui-gw</strong>（HMI 网关），它们都作为 <code>srcomm</code> client 连这台机器的 <code>:40050</code>。</li>
+        <li><code>PickPlace</code> 是<strong>阻塞式</strong>的：校验状态 → 发 MQTT 给控制器 → <strong>每 50ms 轮询 FSM 状态</strong>直到成功 / 失败 / 超时；另有流式版本 <code>PickPlaceStream</code>。</li>
+        <li><code>GetSystemInfo</code> 返回的 state 决定这台机器对 hcms 是 <code>IDLE / PROCESSING / NOT_OPERATING / UNAVAILABLE</code>，metadata 里带库存、温度、进度。hcms 每 500ms 轮询一次（<code>hcms/internal/hmc/srm.go</code>）。</li>
+      </ul>
+      <pre><span class="cmt">// srcomm 服务（hcms-core/api/srcomm/srcomm.proto）</span>
+GetSystemInfo · PickPlace · Deliver · StacksQuery · StacksUpdate
+GetState · OnlineRequest · Cancel</pre>
+
+      <h3 id="larder-sync">2.6 配方 / 库存同步</h3>
+      <ul>
+        <li>暴露 <code>POST /upload</code>：body 是整份 <code>stacksInfo.json</code> 映射，由 <strong>recipe-updater</strong> 推送（<code>rfm6.go</code> 里请求 <code>http://&lt;larder-ip&gt;:3000/upload</code>）。</li>
+        <li><code>setMultipleQuantity</code> 支持 UI 或运维手动改库存。</li>
+        <li>自升级：<code>/setting/checkUpdate</code>、<code>/setting/update</code> 从 GitHub Releases 拉取 larder-api / larder-ui / larder-control / stm32 制品（见 config <code>update.*</code>）。</li>
+      </ul>
+      <div class="note warn">
+        <b>配置注意</b>
+        仓库里的 <code>configs/config.yaml</code> 是开发机配置（Windows 绝对路径 <code>D:/hestia/...</code>）。本地跑之前先改成你的路径；生产路径是 <code>/home/orangepi/ld-api/</code>。
+      </div>
+    </section>
+
+    <!-- ======================= 3 ======================= -->
+    <section id="larder-ui">
+      <h2><span class="num">3</span>larder-ui（前端）</h2>
+      <p class="lead">仓库 <code>larder-ui</code> · Vue 3 + Vite 6 + Pinia + vue-router + vue-i18n + axios + Tailwind</p>
+
+      <div class="grid2">
+        <div class="mini-card">
+          <h4>路径与基座</h4>
+          <p><code>base: '/ui/'</code> —— 决定 API 以 <code>/ui</code> 托管、路由用 <code>createWebHistory(BASE_URL)</code>。</p>
+          <p><code>plugins/axios.js</code>：<code>baseURL = http://localhost:3000</code>（来自 <code>settings.js</code>）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>页面结构</h4>
+          <p><code>/opening /home /inventory /layout /multiCellUpdate /app/*（教程·语言·激活·睡眠）/error /softwareFailure</code></p>
+          <p><code>views/setting/*</code>：电机、参数、传感器、网络、软件升级、ULTest 老化测试…</p>
+        </div>
+        <div class="mini-card">
+          <h4>实时状态（关键）</h4>
+          <p>入口在 <code>src/main.js</code>：开机即连 <code>/setting/emoSse</code>，监听 <code>state / initialState / temperature / doorsOpen / apiResetNotify</code>。</p>
+          <p>库存、电机、拣货各有独立 SSE 连接（见 <code>ULTest.vue</code>）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>构建与发布</h4>
+          <p><code>npm run build</code> → <code>dist/</code> → 打成 zip 传 GitHub Release。</p>
+          <p>机器上 ldapi 从 <code>~/larder-api/ui</code> 提供页面。CI：prettier + eslint + build。</p>
+        </div>
+      </div>
+
+      <pre><span class="cmt"># 本地前端开发</span>
+cd ~/repos/larder-ui
+npm install
+npm run dev        <span class="cmt"># :5173，直连本机 larder-api :3000（CORS 全开）</span></pre>
+      <p class="note info"><b>小知识</b>config 里的 <code>ui_port: 5173</code> 与 README 提到的 "live remote control" 有关：方便在开发机上远程开着柜机的调试页面。</p>
+    </section>
+
+    <!-- ======================= 4 ======================= -->
+    <section id="neighbors">
+      <h2><span class="num">4</span>周边服务串讲</h2>
+      <p class="lead">每台机器之外的部分：门店集成层与云端。</p>
+
+      <h3 id="onsite">4.1 门店 Roboserver（edge PC）</h3>
+      <p>部署见 <code>kitchenos-deployment/compose/</code>（docker compose + mosquitto + mongo + datadog-agent）。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>服务</th><th>技术 / 端口</th><th>一句话职责</th><th>关键连接</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>hcms</strong></td>
+              <td>Go · gRPC <code>:40031</code></td>
+              <td>本地"调度大脑"：订单拆 Task，编排 srm / sf / dpc / bus 各机器；配方合并、deliver_delay、告警</td>
+              <td>对上被 hcsui-gw、eats-gw 调用；对下作为 client 调 larder-api :40050，或经 MQTT 控 dispenser / MC / 传送带</td>
+            </tr>
+            <tr>
+              <td><strong>hcsui-gw</strong></td>
+              <td>Go · GraphQL <code>:8180</code></td>
+              <td>门店 HMI 网关 / BFF：鉴权（JWT + API key），聚合 hcms + mongo，向 recipes-api-v2 同步配方</td>
+              <td>→ hcms:40031；→ mongodb；→ recipes-api-v2</td>
+            </tr>
+            <tr>
+              <td><strong>hcsui</strong></td>
+              <td>Vue 2 + Vuetify + Vue Apollo</td>
+              <td>店员/运维看板：订单进度、RF 设置、系统设置（<code>HMIV1.vue</code> 等）</td>
+              <td>→ hcsui-gw GraphQL</td>
+            </tr>
+            <tr>
+              <td><strong>eats-gw</strong></td>
+              <td>Go · HTTP <code>:8180</code>（路由器把外网 80 转发过来）</td>
+              <td>订单入口：收 POS / 外卖平台下单，解密 → 配方修正/合并 → 调 hcms AddJob</td>
+              <td>接口：<code>/v1/send-job</code>、<code>/v1/api-enabled</code>、<code>/v1/check-status</code>、<code>/v1/job-history</code></td>
+            </tr>
+            <tr>
+              <td><strong>square-gw</strong></td>
+              <td>Go + SQLite</td>
+              <td>轮询 Square 支付单，catalog → Hestia 产品码映射，加密后 POST 到 eats-gw</td>
+              <td>→ Square API；→ eats-gw <code>/v1/send-job</code></td>
+            </tr>
+            <tr>
+              <td><strong>recipe-updater</strong></td>
+              <td>Go · <code>:20000</code></td>
+              <td>配方/库存下发器：WebSocket <code>/update?machineId=</code>，从 recipes-api-v2 拉配方与 box 映射，写到各机器</td>
+              <td>larder：<code>:3000/upload</code>；炒锅类：<code>/menu/upload</code>；→ recipes-api-v2</td>
+            </tr>
+            <tr>
+              <td><strong>iotcbridge</strong></td>
+              <td>Node.js（azure-iot-device）</td>
+              <td>Azure IoT Central 设备接入（DPS 注册、设备孪生、C2D）：云端 slot 变更写 mongo，再触发 recipe-updater</td>
+              <td>→ Azure IoT；→ mongo；→ updater</td>
+            </tr>
+            <tr>
+              <td><strong>mongodb / mosquitto</strong></td>
+              <td>容器</td>
+              <td>本地配方/产品/合并库；MQTT broker（hcms ↔ dispenser / MC / bus 的命令总线）</td>
+              <td>hcms_network</td>
+            </tr>
+            <tr>
+              <td><strong>datadog-agent</strong></td>
+              <td>容器/宿主</td>
+              <td>日志与指标采集：larder-api socket hook 打 23336、dispenser 23337，hcms 读文件</td>
+              <td>→ Datadog</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note info"><b>入口</b>图上的 <code>hmiproxy</code> 类入口在 deployment 里也有：nginx 反代 + frp / cloudflared 隧道，用于远程访问门店与柜机。</p>
+
+      <h3 id="cloud">4.2 云端</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>服务</th><th>技术</th><th>职责</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>recipes-api-v2</strong></td>
+              <td>Cloudflare Worker（itty-router）+ Stytch</td>
+              <td>配方 / 菜单 / 盒子 REST API。鉴权：Stytch JWT（scope <code>read:recipes</code>）或 apiKey；claims 带 <code>tenantId / license</code>，按租户查 Atlas</td>
+            </tr>
+            <tr><td><strong>MongoDB Atlas / Mongodb HTTP API</strong></td><td>—</td><td>云端多租户配方、cuisine、boxes 数据（Data API <code>/action/aggregate|find</code>）</td></tr>
+            <tr><td><strong>IOT（Azure IoT Central）</strong></td><td>—</td><td>设备管理与 slot / 配方下发通道</td></tr>
+            <tr><td><strong>SyncKitchen 系列</strong><br><span class="pill gray">sk-expo-app · synccok-api · sk-rcp-importexport · sk-recipe-qr</span></td><td>Expo / Node</td><td>商家后台：菜单维护、配方导入导出、二维码点单，数据最终落 Atlas</td></tr>
+            <tr><td><strong>eats365 / Square / menuSifu</strong></td><td>外部</td><td>订单来源（POS / 外卖 / 支付）</td></tr>
+            <tr><td><strong>Stytch</strong></td><td>外部</td><td>recipes-api-v2 的 M2M / JWT 鉴权</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ======================= 5 ======================= -->
+    <section id="flows">
+      <h2><span class="num">5</span>三条业务链路（对应图上 Guided Views）</h2>
+      <p class="lead">把服务名字放进真实数据流里，记忆效果最好。</p>
+
+      <h3>① Recipe sync（配方 / 库存同步）</h3>
+      <div class="flow">
+        <div class="frow">
+          <div class="fbox gray"><b>SyncKitchen 后台</b><span>编辑菜单 / 配方</span></div>
+        </div>
+        <div class="farrow">▼</div>
+        <div class="frow">
+          <div class="fbox gray"><b>MongoDB Atlas</b><span>recipes / boxes</span></div>
+        </div>
+        <div class="farrow">▼ <small>IoT Central 下发 slot 变更</small></div>
+        <div class="frow">
+          <div class="fbox orange"><b>iotcbridge</b><span>写 mongo + 触发 updater</span></div>
+          <div class="fbox orange"><b>recipe-updater</b><span>从 recipes-api-v2 拉数据</span></div>
+        </div>
+        <div class="farrow">▼ <small>POST http://&lt;larder-ip&gt;:3000/upload</small></div>
+        <div class="frow">
+          <div class="fbox green"><b>larder-api</b><span>更新 stacksInfo.json</span></div>
+          <div class="farrow" style="align-self:center">→</div>
+          <div class="fbox blue"><b>larder-ui</b><span>quantitySse 刷新库存</span></div>
+        </div>
+      </div>
+
+      <h3>② Order intake（下单 → 出餐）</h3>
+      <div class="flow">
+        <div class="frow">
+          <div class="fbox gray"><b>eats365</b></div>
+          <div class="fbox gray"><b>Square</b><span>→ square-gw 轮询</span></div>
+          <div class="fbox gray"><b>menuSifu</b></div>
+        </div>
+        <div class="farrow">▼ <small>POST /v1/send-job（加密）</small></div>
+        <div class="frow"><div class="fbox orange"><b>eats-gw</b><span>解密 · 配方修正/合并</span></div></div>
+        <div class="farrow">▼ <small>gRPC AddJob</small></div>
+        <div class="frow"><div class="fbox orange"><b>hcms</b><span>拆 Task · 调度 srm / dpc / sf / bus</span></div></div>
+        <div class="farrow">▼</div>
+        <div class="frow">
+          <div class="fbox green"><b>Larder（srm）</b><span>gRPC PickPlace / Deliver</span></div>
+          <div class="fbox green"><b>Dispenser（dpc）</b><span>MQTT 命令</span></div>
+          <div class="fbox green"><b>MC1~3（sf）</b><span>MQTT 命令</span></div>
+        </div>
+        <div class="farrow">▼ <small>JobQuery / TaskQuery / DeliveryInfoQuery</small></div>
+        <div class="frow">
+          <div class="fbox blue"><b>hcsui-gw</b><span>GraphQL 聚合</span></div>
+          <div class="farrow" style="align-self:center">→</div>
+          <div class="fbox blue"><b>hcsui</b><span>看板 / 进度</span></div>
+        </div>
+      </div>
+
+      <h3>③ On-site HMI（现场操作）</h3>
+      <div class="flow">
+        <div class="frow">
+          <div class="fbox blue"><b>larder-ui</b><span>触屏</span></div>
+          <div class="farrow" style="align-self:center">→ HTTP / SSE →</div>
+          <div class="fbox green"><b>larder-api</b></div>
+          <div class="farrow" style="align-self:center">→ MQTT →</div>
+          <div class="fbox gray"><b>larder-control</b><span>⚠ 硬件细节略</span></div>
+        </div>
+        <div class="farrow" style="padding-top:10px">以及</div>
+        <div class="frow">
+          <div class="fbox blue"><b>hcsui</b></div>
+          <div class="farrow" style="align-self:center">→ GraphQL →</div>
+          <div class="fbox green"><b>hcsui-gw</b></div>
+          <div class="farrow" style="align-self:center">→ gRPC →</div>
+          <div class="fbox orange"><b>hcms</b></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================= 6 ======================= -->
+    <section id="dev">
+      <h2><span class="num">6</span>本地联调起手式</h2>
+      <p class="lead">复制即可跑，先把 Larder 一条线打通。</p>
+
+      <pre><span class="cmt"># ---------- 后端 ----------</span>
+cd ~/repos/larder-api
+go mod tidy        <span class="cmt"># 需要 GOPRIVATE=github.com/Hestia-Technology/*</span>
+go build -v ./cmd/ldapi
+./ldapi -c configs/config.yaml    <span class="cmt"># 先把 config 里 Windows 路径改为本机；HTTP :3000 / gRPC :40050</span>
+
+<span class="cmt"># ---------- 前端 ----------</span>
+cd ~/repos/larder-ui
+npm install
+npm run dev        <span class="cmt"># :5173，直连本机 :3000</span>
+
+<span class="cmt"># ---------- MQTT 自测（README 有）----------</span>
+mosquitto_sub -p 1883 -t "/larder/ctrl/cmd/" -v
+mosquitto_pub -p 1883 -t "/larder/ctrl/cmd/" -m "FSM_SETTINGS 4"
+
+<span class="cmt"># ---------- 机器上查日志 ----------</span>
+tail -n 200 -f /home/orangepi/ld-api/log/ldapi-&lt;date&gt;.log
+tail -n 500 ld-api.log | jq -r 'del(.file, .func) | ...'   <span class="cmt"># README 里有完整 jq 过滤命令</span></pre>
+
+      <div class="grid2">
+        <div class="mini-card">
+          <h4>发布纪律</h4>
+          <p>main 禁止直接 push，走 PR + CI（build / lint / unit test）。</p>
+          <p>发版前手动改版本号：<code>internal/settings/machine_setting.go</code> 的 <code>BackendVersion</code>（当前 <code>v6.0.18</code>）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>发布机制</h4>
+          <p>打 tag → GitHub Actions（GoReleaser / Vue Release）产出制品 → 机器上 <code>/setting/update</code> 自动拉取。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================= 7 ======================= -->
+    <section id="risks">
+      <h2><span class="num">7</span>风险与注意事项</h2>
+
+      <div class="note danger">
+        <b>① 明文 GitHub PAT 已提交进 git 历史 ⚠</b>
+        <code>configs/config.yaml</code> 里的 <code>github_token: ghp_...</code> 不是本地改动，<code>git show HEAD:configs/config.yaml</code> 可以直接看到。建议尽快轮换该 token，并改造成环境变量 / Secret 注入（GitHub Actions 里已经在用 secrets 了）。
+      </div>
+
+      <div class="note warn">
+        <b>② CORS 配置过宽</b>
+        <code>AllowOrigins: ["*"]</code> + <code>AllowCredentials: true</code>：浏览器规范下这种组合不可靠，且有安全风险。生产应改为白名单（<code>localhost:5173</code>、柜机自身 IP 等）。
+      </div>
+
+      <div class="note warn">
+        <b>③ 配置文件的本地路径</b>
+        <code>configs/config.yaml</code> 目前是开发机配置（<code>D:/hestia/...</code>），克隆后必须改，否则起不来。
+      </div>
+
+      <div class="note info">
+        <b>④ 缓存策略有意为之</b>
+        <code>index.html</code> no-store、<code>/ui/assets/*</code> immutable，是为了避免 Vite 构建后客户端拿到旧入口、动态 import 失败——不要"顺手优化"掉。
+      </div>
+    </section>
+
+    <!-- ======================= 8 ======================= -->
+    <section id="reading">
+      <h2><span class="num">8</span>建议阅读顺序</h2>
+      <p class="lead">按这条线走一遍，前后端 + 上下游就都通了。</p>
+      <ol>
+        <li><code>larder-api/internal/endpoints/routes.go</code> —— 先看它对外提供了什么</li>
+        <li><code>larder-api/internal/models/hcms_comm.go</code> + <code>controller_comm.go</code> —— 订单/状态机核心</li>
+        <li><code>larder-api/internal/grpcservice/grpc.go</code> —— 上游怎么消费你</li>
+        <li><code>larder-api/internal/stacks/</code> —— 库存与坐标模型</li>
+        <li><code>larder-ui/src/main.js</code> + <code>plugins/axios.js</code> —— 前端入口与 SSE</li>
+        <li><code>hcms/internal/hmc/srm.go</code> —— 看上游 hcms 怎么调用你的 gRPC</li>
+        <li><code>recipe-updater/rfm6.go</code> —— 看配方数据怎么进来</li>
+      </ol>
+      <footer class="foot">Hestia Software Deployment Architecture · onboarding 材料 · 生成于本地仓库笔记</footer>
+    </section>
+
+  </main>
+</div>
+
+<button id="toTop" title="回到顶部">↑</button>
+
+<script>
+  // TOC scroll-spy
+  const links = Array.from(document.querySelectorAll('nav.toc a'));
+  const targets = links
+    .map(a => document.querySelector(a.getAttribute('href')))
+    .filter(Boolean);
+
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const link = links.find(l => l.getAttribute('href') === '#' + entry.target.id);
+        if (link) link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-10% 0px -80% 0px', threshold: 0 });
+
+  targets.forEach(t => observer.observe(t));
+
+  // Back to top
+  const btn = document.getElementById('toTop');
+  window.addEventListener('scroll', () => {
+    btn.style.display = window.scrollY > 400 ? 'block' : 'none';
+  });
+  btn.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+</script>
+
+</body>
+</html>

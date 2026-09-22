@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MC 多锅机 · mc-ui &amp; mc-api 串讲（含 App Library）</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --panel: #ffffff;
+    --fg: #1f2430;
+    --muted: #667085;
+    --border: #e4e7ec;
+    --accent: #0f6fff;
+    --accent-soft: #eaf2ff;
+    --green: #0e9f6e;
+    --green-soft: #e6f6f0;
+    --orange: #d97706;
+    --orange-soft: #fdf3e3;
+    --purple: #7c3aed;
+    --purple-soft: #f3edff;
+    --red: #dc2626;
+    --red-soft: #fdecec;
+    --code-bg: #0f172a;
+    --code-fg: #e2e8f0;
+    --radius: 12px;
+    --shadow: 0 1px 3px rgba(16,24,40,.06), 0 1px 2px rgba(16,24,40,.04);
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+    font-size: 15px;
+    line-height: 1.75;
+  }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; }
+
+  .layout { display: flex; max-width: 1280px; margin: 0 auto; padding: 0 24px 80px; gap: 32px; }
+  nav.toc {
+    width: 250px; flex: 0 0 250px;
+    position: sticky; top: 0; align-self: flex-start;
+    max-height: 100vh; overflow-y: auto;
+    padding: 28px 0 40px;
+    font-size: 13.5px;
+  }
+  nav.toc .toc-title { font-weight: 700; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
+  nav.toc a {
+    display: block; padding: 5px 12px; color: #475467; text-decoration: none;
+    border-left: 2px solid transparent; border-radius: 0 6px 6px 0;
+  }
+  nav.toc a:hover { color: var(--accent); background: var(--accent-soft); }
+  nav.toc a.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+  nav.toc a.sub { padding-left: 24px; font-size: 12.5px; }
+  main { flex: 1 1 auto; min-width: 0; padding-top: 8px; }
+
+  header.hero {
+    background: linear-gradient(135deg, #1b1035 0%, #3b1d6e 55%, #7c3aed 130%);
+    color: #fff; border-radius: var(--radius); padding: 34px 36px; margin: 24px 0 28px;
+    box-shadow: 0 10px 30px rgba(124,58,237,.2);
+  }
+  header.hero h1 { margin: 0 0 8px; font-size: 26px; line-height: 1.35; }
+  header.hero p { margin: 0; color: #e2d8ff; font-size: 14.5px; }
+  header.hero .chips { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+  header.hero .chip { background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.25); padding: 3px 10px; border-radius: 999px; font-size: 12.5px; }
+
+  section {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 28px 32px; margin-bottom: 24px; box-shadow: var(--shadow);
+    scroll-margin-top: 16px;
+  }
+  section > h2 { margin: 0 0 6px; font-size: 21px; display: flex; align-items: center; gap: 10px; }
+  section > h2 .num {
+    flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; border-radius: 8px; background: var(--accent); color: #fff;
+    font-size: 14px; font-weight: 700;
+  }
+  section > h2 .num.purple { background: var(--purple); }
+  section > .lead { color: var(--muted); margin: 0 0 18px 38px; font-size: 14px; }
+  h3 { font-size: 16.5px; margin: 26px 0 10px; }
+  h3::before { content: ""; display: inline-block; width: 4px; height: 14px; background: var(--accent); border-radius: 2px; margin-right: 8px; vertical-align: -1px; }
+  p { margin: 8px 0; }
+  ul, ol { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  a { color: var(--accent); }
+  strong { font-weight: 650; }
+
+  .table-wrap { overflow-x: auto; margin: 12px 0; border: 1px solid var(--border); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 620px; }
+  th { background: #f2f5f9; text-align: left; padding: 10px 14px; font-weight: 650; color: #344054; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 9px 14px; border-bottom: 1px solid #eef1f5; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #fafbfc; }
+  td code, p code, li code { background: #f0f3f7; border: 1px solid #e3e8ef; padding: 1px 6px; border-radius: 6px; font-size: 12.5px; color: #334155; white-space: nowrap; }
+
+  pre {
+    background: var(--code-bg); color: var(--code-fg); border-radius: 10px;
+    padding: 16px 18px; overflow-x: auto; font-size: 12.8px; line-height: 1.65;
+    margin: 12px 0;
+  }
+  pre .cmt { color: #7d8da6; }
+  pre .hl { color: #c4b5fd; }
+  pre .str { color: #a5d6a7; }
+
+  .note { border-radius: 10px; padding: 12px 16px; margin: 14px 0; font-size: 13.5px; border: 1px solid; }
+  .note.info { background: var(--accent-soft); border-color: #c7dbff; }
+  .note.warn { background: var(--orange-soft); border-color: #f3d9a4; }
+  .note.danger { background: var(--red-soft); border-color: #f5b5b5; }
+  .note.purple { background: var(--purple-soft); border-color: #ddd0f7; }
+  .note b { display: block; margin-bottom: 2px; }
+  .note.info b { color: #0b56c4; } .note.warn b { color: #b45309; } .note.danger b { color: #b91c1c; } .note.purple b { color: #6d28d9; }
+
+  .flow { display: flex; flex-direction: column; align-items: stretch; gap: 0; margin: 16px 0; }
+  .frow { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; align-items: stretch; }
+  .fbox {
+    border: 1px solid var(--border); background: #fff; border-radius: 10px;
+    padding: 8px 14px; font-size: 12.8px; text-align: center; min-width: 120px;
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  .fbox b { display: block; font-size: 13px; }
+  .fbox span { color: var(--muted); font-size: 11.5px; }
+  .fbox.blue { background: var(--accent-soft); border-color: #c7dbff; }
+  .fbox.green { background: var(--green-soft); border-color: #bfe8d8; }
+  .fbox.orange { background: var(--orange-soft); border-color: #f3d9a4; }
+  .fbox.purple { background: var(--purple-soft); border-color: #ddd0f7; }
+  .fbox.red { background: var(--red-soft); border-color: #f5b5b5; }
+  .fbox.gray { background: #f2f4f7; color: #475467; }
+  .farrow { text-align: center; color: var(--muted); font-size: 16px; line-height: 1.2; padding: 2px 0; }
+  .farrow small { display: block; font-size: 11px; color: #98a2b3; letter-spacing: .03em; }
+
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .pill.blue { background: var(--accent-soft); border-color: #c7dbff; color: #0b56c4; }
+  .pill.green { background: var(--green-soft); border-color: #bfe8d8; color: #067a54; }
+  .pill.orange { background: var(--orange-soft); border-color: #f3d9a4; color: #b45309; }
+  .pill.purple { background: var(--purple-soft); border-color: #ddd0f7; color: #6d28d9; }
+  .pill.red { background: var(--red-soft); border-color: #f5b5b5; color: #b91c1c; }
+  .pill.gray { background: #f2f4f7; border-color: #e4e7ec; color: #475467; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .mini-card { border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; background: #fcfcfd; }
+  .mini-card h4 { margin: 0 0 6px; font-size: 14px; }
+  .mini-card p { margin: 4px 0; font-size: 13px; color: #475467; }
+
+  /* App Library mock */
+  .mock-phone {
+    width: 380px; max-width: 100%; margin: 14px auto; border-radius: 22px;
+    background: rgba(28,28,30,.92); color: #fff; padding: 14px 18px 18px;
+    box-shadow: 0 18px 40px rgba(0,0,0,.28); border: 6px solid #1c1c1e;
+  }
+  .mock-phone .mock-title { font-size: 20px; font-weight: 700; padding: 6px 2px 12px; border-bottom: 1px solid rgba(255,255,255,.14); display: flex; justify-content: space-between; align-items: center; }
+  .mock-phone .mock-title span { font-size: 14px; opacity: .7; }
+  .mock-row { display: flex; align-items: center; padding: 10px 2px 10px 22px; font-size: 14px; gap: 14px; }
+  .mock-row .ico { width: 26px; height: 26px; border-radius: 6px; background: rgba(255,255,255,.16); display: inline-flex; align-items: center; justify-content: center; font-size: 13px; }
+  .mock-hr { height: 1px; background: rgba(255,255,255,.16); margin: 6px 0 6px 60px; }
+  .mock-gap { height: 14px; }
+  .mock-restart { margin-top: 22px; background: var(--accent); border-radius: 10px; text-align: center; padding: 10px; font-size: 14px; font-weight: 600; }
+  .mock-caption { text-align: center; color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+
+  .kv { font-size: 13.5px; }
+  .kv div { display: flex; gap: 8px; padding: 3px 0; }
+  .kv .k { flex: 0 0 150px; color: var(--muted); }
+  .checklist { list-style: none; padding-left: 0; }
+  .checklist li { padding-left: 28px; position: relative; }
+  .checklist li::before {
+    content: ""; position: absolute; left: 2px; top: 7px; width: 14px; height: 14px;
+    border: 2px solid #c0c7d1; border-radius: 4px;
+  }
+  footer.foot { color: var(--muted); font-size: 12.5px; text-align: center; margin-top: 8px; }
+  #toTop {
+    position: fixed; right: 26px; bottom: 26px; width: 40px; height: 40px; border-radius: 50%;
+    border: 1px solid var(--border); background: #fff; color: var(--accent); font-size: 18px;
+    cursor: pointer; box-shadow: var(--shadow); display: none;
+  }
+  #toTop:hover { background: var(--accent-soft); }
+
+  @media (max-width: 980px) {
+    .layout { flex-direction: column; padding: 0 14px 60px; gap: 0; }
+    nav.toc { position: static; width: auto; max-height: none; padding: 16px 0 0; }
+    nav.toc .toc-body { display: flex; flex-wrap: wrap; gap: 2px; }
+    nav.toc a { border-left: none; border-radius: 8px; padding: 4px 10px; }
+    nav.toc a.sub { display: none; }
+    section { padding: 20px 18px; }
+    section > .lead { margin-left: 0; }
+    header.hero { padding: 24px 20px; }
+    .grid2 { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="layout">
+
+  <nav class="toc" id="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc-body">
+      <a href="#overview">0 · 速览：两个仓库是什么</a>
+      <a href="#arch">1 · mc-ui ↔ mc-api 架构</a>
+      <a href="#mc-ui">2 · mc-ui 前端详解</a>
+      <a class="sub" href="#mcui-global">2.1 全局能力（main.js）</a>
+      <a class="sub" href="#mcui-status">2.2 状态驱动的路由</a>
+      <a class="sub" href="#mcui-routes">2.3 路由 / 页面 / i18n / 样式</a>
+      <a href="#mc-api">3 · mc-api 后端详解</a>
+      <a class="sub" href="#mcapi-modules">3.1 模块与 API 一览</a>
+      <a class="sub" href="#mcapi-machine">3.2 Machine：串口与状态广播</a>
+      <a class="sub" href="#mcapi-update">3.3 升级与分发（Azure Blob）</a>
+      <a href="#applib">4 · ⭐ App Library 专章</a>
+      <a class="sub" href="#applib-where">4.1 位置与触发方式</a>
+      <a class="sub" href="#applib-items">4.2 现有条目拆解</a>
+      <a class="sub" href="#applib-style">4.3 样式与布局</a>
+      <a class="sub" href="#applib-mod">4.4 修改指南 + 避坑</a>
+      <a href="#dev">5 · 本地开发与发布</a>
+      <a href="#reading">6 · 建议阅读顺序</a>
+    </div>
+  </nav>
+
+  <main>
+
+    <header class="hero">
+      <h1>Multicooker 多锅机<br><span class="mono">mc-ui</span> &amp; <span class="mono">mc-api</span> 串讲</h1>
+      <p>Vue 3 触屏前端 × Node.js 机器后端 · 重点标注 App Library 界面 · 硬件部分只讲接口边界</p>
+      <div class="chips">
+        <span class="chip">Vue 3 + Vite</span>
+        <span class="chip">Pinia</span>
+        <span class="chip">Express + WS</span>
+        <span class="chip">Serial / CRC16</span>
+        <span class="chip">MQTT</span>
+        <span class="chip">Azure Blob 升级</span>
+      </div>
+    </header>
+
+    <!-- ======================= 0 ======================= -->
+    <section id="overview">
+      <h2><span class="num">0</span>速览：两个仓库是什么</h2>
+      <p class="lead">MC（Multicooker，多锅炒菜机）这一台机器上的"前端 + 后端"两件套。</p>
+
+      <div class="grid2">
+        <div class="mini-card">
+          <h4>mc-ui <span class="pill purple">multicooker-ui</span></h4>
+          <p>跑在机器触摸屏上的 <strong>Vue 3 应用</strong>（800×1280 竖屏）。点菜、做菜流程、主厨模式、清洁、设置、App Library 都在这里。</p>
+          <p><code>npm run dev</code> → :3001；<code>npm run build</code> → <code>ui/</code> → <code>ui.zip</code> → 上传 Azure Blob。</p>
+        </div>
+        <div class="mini-card">
+          <h4>mc-api <span class="pill purple">multicooker-api / multicooker-data</span></h4>
+          <p>机器上的 <strong>Node.js (Express) 本地服务</strong>，:3000。持有机器状态、串口协议、MQTT、菜单文件、设置、升级逻辑，并<strong>托管 mc-ui 的构建产物</strong>。</p>
+          <p>systemd 服务 <code>multicooker.service</code>，WorkingDirectory <code>/multicooker</code>，<code>node ./index.js</code>。</p>
+        </div>
+      </div>
+
+      <div class="note purple">
+        <b>一句话关系</b>
+        mc-api 是"机器的操作系统接口"，mc-ui 是"机器的脸"。浏览器加载的是 mc-api 静态托管的 mc-ui 页面，页面再通过 HTTP + WebSocket 跟 mc-api 交互。
+      </div>
+
+      <pre><span class="cmt">// 两个仓库的核心文件</span>
+mc-ui/  index.html → src/main.js → src/App.vue → views/*  components/*
+        src/settings.mjs    <span class="cmt">// version / api_server_ip / 开关</span>
+        src/plugins/router.js  i18n.js
+        src/protocol.js     <span class="cmt">// MachineStatus → 页面跳转规则</span>
+
+mc-api/ index.js → src/UI.js  Settings.js  Serial.js  Machine.js
+                      Firmware.js  MQTT.js  Menu.js  Update.js
+        version.js          <span class="cmt">// API 版本号（与 UI 的 settings.mjs 对齐）</span></pre>
+    </section>
+
+    <!-- ======================= 1 ======================= -->
+    <section id="arch">
+      <h2><span class="num">1</span>mc-ui ↔ mc-api 架构</h2>
+      <p class="lead">数据怎么流动，谁调用谁。</p>
+
+      <div class="flow">
+        <div class="frow">
+          <div class="fbox blue"><b>浏览器 / 触摸屏 Chromium</b><span>800×1280</span></div>
+        </div>
+        <div class="farrow">▼ <small>加载 http://&lt;机器IP&gt;:3000/（mc-api 托管 ui/ 静态产物）</small></div>
+        <div class="frow">
+          <div class="fbox purple"><b>mc-ui</b><span>Vue 3 SPA</span></div>
+          <div class="farrow" style="align-self:center">⇄</div>
+          <div class="fbox blue"><b>mc-api :3000</b><span>Express + express-ws</span></div>
+        </div>
+        <div class="farrow">▼ <small>HTTP：/menu /settings /machine /update ／ WS：/machine/status</small></div>
+        <div class="frow">
+          <div class="fbox green"><b>串口协议</b><span>serialcom · CRC16 · 100Hz buffer</span></div>
+          <div class="fbox orange"><b>MQTT</b><span>/cm/&lt;id&gt;/cmd · /cm/&lt;id&gt;/error</span></div>
+          <div class="fbox gray"><b>Azure Blob</b><span>ui.zip / api.zip / firmware</span></div>
+        </div>
+        <div class="farrow">▼ <small>硬件/控制板细节略</small></div>
+        <div class="frow">
+          <div class="fbox gray"><b>控制板（PIC32）</b><span>电机 / 加热 / IO</span></div>
+        </div>
+      </div>
+
+      <p><strong>注意方向</strong>：mc-ui <em>不直接</em>连串口/硬件，所有动作都是 <code>send_cmd(...)</code> → HTTP <code>/machine/cmd?cmd=...</code> → mc-api 编码后走串口。MQTT 是"云端/门店 hcms → 机器"的反向指令通道（比如 <code>COOK &lt;recipeId&gt;</code>）。</p>
+    </section>
+
+    <!-- ======================= 2 ======================= -->
+    <section id="mc-ui">
+      <h2><span class="num">2</span>mc-ui 前端详解</h2>
+      <p class="lead">Vue 3.2 + Vite 6 + Pinia + vue-router(hash) + vue-i18n + axios。无 UI 组件库，全部手写样式。</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>顶层目录</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td><code>src/main.js</code></td><td>全局装配：Pinia、router、i18n、axios 封装、全局函数、WebSocket、settings</td></tr>
+            <tr><td><code>src/App.vue</code></td><td>固定画布居中（800×1280）、overlay 层挂载（AppsOverlay / PopUp / Restart / Language / QRCode）、启动时 <code>get_menu()</code></td></tr>
+            <tr><td><code>src/protocol.js</code></td><td><code>route_machine_status()</code>：机器状态 → 路由跳转 / 弹窗；错误码映射；路由排除列表</td></tr>
+            <tr><td><code>src/views/</code></td><td>Home / Start / Init / Sleep / Menu/Recipes / Cook(Prepare·Cooking) / ChefsMode / MachineID / QRCode / Backend / Settings/** / Tutorials / Troubleshooting / Error</td></tr>
+            <tr><td><code>src/components/</code></td><td><code>general/</code>（AppsOverlay、Navigation、各 Overlay）· <code>widgets/</code>（TopBar、Button、Toggle、PageIndex…）· <code>cook/</code> · <code>settings/</code> · <code>backend/</code></td></tr>
+            <tr><td><code>src/stores/</code></td><td><code>GlobalProps</code>（show_apps、popup、menu、selected_recipe…）· <code>MachineStatus</code></td></tr>
+            <tr><td><code>src/assets/</code></td><td><code>home/</code>（App Library 用的图标 SVG）、<code>styles/style.css</code>（CSS 变量 + 工具类）、fonts</td></tr>
+            <tr><td><code>src/plugins/i18n.js</code></td><td>四种语言（en / ja / zh_Hans / zh_Hant）集中在一个 3200+ 行的文件里</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="mcui-global">2.1 全局能力（<code>src/main.js</code>）</h3>
+      <p>main.js 把一堆函数挂在 <code>app.config.globalProperties</code> 上，所有 .vue 里直接 <code>this.xxx()</code> 用：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>全局函数 / 对象</th><th>作用</th></tr></thead>
+          <tbody>
+            <tr><td><code>api_server_get(path, cb, err_cb)</code></td><td>axios 封装，请求 <code>http://${api_server_ip}:${api_server_port}${path}</code>（30s 超时）</td></tr>
+            <tr><td><code>send_cmd(cmd)</code></td><td>核心动作接口：GET <code>/machine/cmd?cmd=...</code>，如 <code>COOK 12</code>、<code>online 0</code>、<code>pausecook 1</code></td></tr>
+            <tr><td><code>get_menu()</code> / <code>get_recipe(id)</code></td><td>拉菜单目录与单个菜谱内容，缓存进 <code>GlobalProps</code></td></tr>
+            <tr><td><code>show_popup(name, params)</code></td><td>打开预定义弹窗（<code>defs/popup_defs.js</code>），如 <code>sleep_confirm</code>、<code>restart_confirm</code></td></tr>
+            <tr><td><code>restart()</code></td><td>调 <code>/machine/restart</code> 并跳转 /start（App Library 底部按钮走 popup → 这里）</td></tr>
+            <tr><td><code>GlobalProps</code> / <code>MachineStatus</code></td><td>Pinia store，分别对应"UI 状态"和"机器实时状态"</td></tr>
+            <tr><td><code>settings</code></td><td>来自 <code>src/settings.mjs</code>：version、api_server_ip/port、宽高、num_ingredients、两个开关</td></tr>
+            <tr><td><code>version_get()</code> / <code>serial_number_get()</code></td><td>拼 firmware+ui+api 版本、读 SN（用于 Machine ID 页）</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <pre><span class="cmt">// src/settings.mjs —— 前端唯一静态配置</span>
+version: '6.0.8.0',
+api_server_ip: '10.93.2.142',   <span class="cmt">// 默认被当前 URL 的 host 覆盖（见下方说明）</span>
+api_server_port: 3000,
+width: 800, height: 1280,       <span class="cmt">// 设计画布，App.vue 用它居中</span>
+num_ingredients: 7,
+custom_server_origin: false,    <span class="cmt">// true = 用上面的固定 IP，不跟随 URL</span>
+disable_route_status: false     <span class="cmt">// true = 关闭"状态驱动跳转"，调试必备</span></pre>
+      <div class="note info">
+        <b>IP 从哪来</b>
+        <code>main.js</code> 里 <code>const origin_ip = document.URL.split(/\/|:/)[3]</code>：只要 <code>custom_server_origin=false</code>，前端就用"当前页面的 host"作为 API 地址 —— 所以机器上直接用机器 IP 打开即可；开发时把 <code>custom_server_origin</code> 改成 <code>true</code> 并填 API 的 IP。
+      </div>
+
+      <h3 id="mcui-status">2.2 状态驱动的路由（重点，改页面前必读）</h3>
+      <p>mc-ui 的页面不是用户想去哪就去哪——<strong>机器状态会强制导航</strong>：</p>
+      <ol>
+        <li><code>main.js</code> 建立 WebSocket <code>ws://&lt;ip&gt;:3000/machine/status</code>，把收到的 JSON 整个覆盖进 <code>MachineStatus</code> store（含 <code>MachineStatusPrev</code>）。</li>
+        <li>每次收到消息调用 <code>protocol.js</code> 的 <code>route_machine_status(global)</code>，规则包括：
+          <ul>
+            <li><code>server_state === 'SLEEP'</code> → 强制 <code>/sleep</code></li>
+            <li><code>server_state === 'FAILURE'</code> → 强制 <code>/error</code></li>
+            <li><code>system_state === 'ERROR'</code> → 按错误码跳 <code>/error?error_name=gripper|overheat|emo</code></li>
+            <li>开始做菜 → 自动进烹饪页；做完 → 弹 <code>order_completed</code> 等</li>
+            <li>alert_id → 各种弹窗（<code>alert_id_to_popup_name</code>）</li>
+          </ul>
+        </li>
+        <li>例外名单 <code>route_exclude</code>：<code>/backend</code>、<code>/settings/general</code>、<code>/settings/factorysettings</code> 不会被强制跳走。</li>
+      </ol>
+      <div class="note warn">
+        <b>调试开关</b>
+        改新页面/新 App Library 条目时，如果被状态跳来跳去，先把 <code>settings.disable_route_status = true</code>（浏览器里按 Enter 键也会切回旧 IP + 打开这个开关，见 <code>App.vue</code> 的 keypress 监听）。
+      </div>
+
+      <h3 id="mcui-routes">2.3 路由 / 页面 / i18n / 样式</h3>
+      <div class="grid2">
+        <div class="mini-card">
+          <h4>路由</h4>
+          <p><code>createWebHashHistory</code>（URL 带 <code>#</code>），<code>base: './'</code> —— 这是为了能在机器上以相对路径部署。</p>
+          <p>主要路由：<code>/</code> · <code>/home</code> · <code>/menu</code> · <code>/menu/recipes</code> · <code>/cook/prepare</code> · <code>/cook/cooking</code> · <code>/chefsmode</code> · <code>/settings/*</code> · <code>/machineid</code> · <code>/qrcode</code> · <code>/backend</code> · <code>/error</code> · <code>/sleep</code></p>
+        </div>
+        <div class="mini-card">
+          <h4>i18n</h4>
+          <p>语言：<code>en</code> / <code>ja</code> / <code>zh_Hans</code> / <code>zh_Hant</code>，全部在 <code>plugins/i18n.js</code>。</p>
+          <p>运行时语言来自 mc-api <code>/settings</code> 的 <code>ui.lang</code>；<code>App Library</code> 的标题 key 是 <code>home.apps</code>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>样式系统</h4>
+          <p><code>assets/styles/style.css</code>：CSS 变量（<code>--primary:#007aff</code>、<code>--error</code>、<code>--bkg</code>…）+ 一批工具类（<code>.full</code> <code>.flex</code> <code>.padding</code> <code>.bg_white</code> <code>.text_normal</code> <code>.row_next</code> <code>.horizontal_line</code>…）。</p>
+          <p>字体 Poppins + NotoSans SC/TC/JP；<code>cursor:none</code>（触屏，无鼠标指针）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>页面间的公共件</h4>
+          <p><code>TopBar</code>（title / back / white / show_language_white / 左右 slot）、<code>Navigation</code>（底部 Home·Clean·Menu·ChefsMode·Power）、各 Overlay。</p>
+          <p>路由切换会顺手打一条日志到 mc-api：<code>/ui/log?log=route%20...</code>。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================= 3 ======================= -->
+    <section id="mc-api">
+      <h2><span class="num">3</span>mc-api 后端详解</h2>
+      <p class="lead">Node.js + Express 4 + express-ws + express-fileupload + MQTT + Azure SDK + winston。单进程 :3000。</p>
+
+      <pre><span class="cmt">// index.js 的核心结构：模块 = { get/post/delete/ws endpoints }</span>
+app.use('/', express.static('./ui'))     <span class="hl">// 托管 mc-ui 构建产物</span>
+const UI = require('./src/UI');         register_endpoints(UI.endpoints)
+const Settings = require('./src/Settings'); register_endpoints(Settings.endpoints)
+const Serial = require('./src/Serial');     register_endpoints(Serial.endpoints)
+const Machine = require('./src/Machine');   register_endpoints(Machine.endpoints)
+const Firmware = require('./src/Firmware'); register_endpoints(Firmware.endpoints)
+const MQTT = require('./src/MQTT');         register_endpoints(MQTT.endpoints)
+const Menu = require('./src/Menu');         register_endpoints(Menu.endpoints)
+const Update = require('./src/Update');     register_endpoints(Update.endpoints)</pre>
+
+      <h3 id="mcapi-modules">3.1 模块与 API 一览</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>模块</th><th>职责</th><th>关键接口</th></tr></thead>
+          <tbody>
+            <tr><td><code>Menu.js</code></td><td>菜单/菜谱文件系统（<code>menu/</code> + <code>menu/machine/</code>）</td>
+              <td><code>GET /menu/menu</code> · <code>/menu/cuisine?id=</code> · <code>/menu/recipe_duration?id=</code> · <code>/menu/recipesdir</code> · <code>/menu/list</code> · <code>/menu/file?filename=</code> · <code>POST /menu/upload</code> · <code>DELETE /menu/delete?filename=</code> · <code>/menu/manage</code>（网页管理页）</td></tr>
+            <tr><td><code>Machine.js</code></td><td>机器状态对象 + 串口命令 + WS 广播 + 服务/文件管理（931 行，最核心）</td>
+              <td><code>GET /machine/cmd?cmd=</code> · <code>/machine/status</code> · <code>/machine/settingsupdate</code> · <code>/machine/settingssave</code> · <code>/machine/sleep /wake /restart</code> · <code>/machine/filelist /filedelete</code> · <code>/machine/log</code> · <code>POST /machine/upload</code> · <code>WS /machine/status</code></td></tr>
+            <tr><td><code>Settings.js</code></td><td><code>settings.json</code> 读写 + 系统设置（nmcli 网络、亮度、SN）</td>
+              <td><code>GET /settings</code> · <code>/settings/version</code> · <code>/settings/update?name=&amp;value=</code> · <code>/settings/network</code> · <code>/settings/ethernet</code> · <code>/settings/wifi</code> · <code>/settings/brightness?value=</code></td></tr>
+            <tr><td><code>MQTT.js</code></td><td>连远程 broker，收云端/门店指令；出站 publish</td>
+              <td>订阅 <code>/cm/&lt;machine_name&gt;/cmd</code>、<code>/cm/&lt;machine_name&gt;/error</code>，收到即 <code>serial_cmd()</code></td></tr>
+            <tr><td><code>Serial.js</code></td><td>串口读写封装（<code>/dev/ttyS9</code> 控制板、<code>/dev/ttyUSB0</code> 触摸屏）</td>
+              <td>内部模块，被 Machine 调用</td></tr>
+            <tr><td><code>Update.js</code></td><td>从 Azure Blob 下载/上传升级包，api/ui/firmware 三类</td>
+              <td><code>GET /update/update?type=api|ui|firmware&amp;test=1</code> · <code>/update/version</code> · <code>/update/updater</code>（网页） · <code>POST /update/upload</code> · <code>WS /update/status</code>（进度）</td></tr>
+            <tr><td><code>Firmware.js</code></td><td>控制板固件烧录（pic32prog）</td>
+              <td><code>/firmware/update</code> · <code>/firmware/progress</code></td></tr>
+            <tr><td><code>UI.js</code></td><td>服务自愈：触摸屏存活检查（30s）、无 Chromium 客户端时重启服务（15s）</td>
+              <td><code>GET /ui/log?log=</code>（前端路由日志打点）</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="mcapi-machine">3.2 Machine：串口与状态广播</h3>
+      <ul>
+        <li><strong>MachineStatus</strong> 是一个巨大的构造函数对象：version、server_state、system_state、online、alert_id、wok 温度、heating、cook（id/order_number/阶段/剩余时间/box_status）、io、motor、motion_state、settings…  UI 那一堆 <code>MachineStatus?.xxx</code> 都来自它。</li>
+        <li><strong>串口命令</strong> <code>serial_cmd(line)</code>：拆词 → <code>COOK</code> 特殊处理（初始化烹饪状态、解析订单号）→ 普通命令加帧长填充 + PC 版 <strong>CRC16</strong> → 压入 100Hz 的 <code>serial_buffer</code> 由 10ms 定时器发送。文件下发则分块走同一 buffer。</li>
+        <li><strong>状态广播</strong>：<code>ws_send_machine_status()</code> 把整个 MachineStatus 逐客户端 send；每 1s 检查控制板存活，10s 无响应 → <code>FAILURE / Controller Status Timeout</code>。</li>
+        <li><strong>客户端数</strong> <code>/machine/clients</code> + <code>UI.start_chromium_check()</code>：一个浏览器都不连就重启服务（防止白屏）。</li>
+      </ul>
+
+      <h3 id="mcapi-update">3.3 升级与分发（Azure Blob）</h3>
+      <pre>容器：<span class="hl">sfm</span>
+  发布：v6/api.zip     v6/ui.zip     v6/sf6.X.production.hex
+  测试：v6/test/...（同上）
+  版本号存在 blob metadata.version 里；<span class="str">/update/version</span> 直接读它对比
+
+mc-api 构建：npx ncc → api/ → zip → <span class="str">tmp/api.zip</span>
+mc-ui  构建：vite build → ui/ → zip → <span class="str">tmp/ui.zip</span>
+机器升级：UI 软件更新页 → /update/update?type=all[&amp;test=1] → 下载 → 安装脚本 → 重启服务</pre>
+      <div class="note warn">
+        <b>上传守卫</b>
+        <code>upload_to_az.mjs</code> 会检查：若 <code>custom_server_origin</code> 或 <code>disable_route_status</code> 不是默认值，<strong>直接退出不上传</strong>（防止把调试配置发到产线）。两个仓库的版本号（<code>mc-ui/src/settings.mjs</code> 与 <code>mc-api/version.js</code>）当前都是 <code>6.0.8.0</code>，发布时要一起改。
+      </div>
+    </section>
+
+    <!-- ======================= 4 ======================= -->
+    <section id="applib">
+      <h2><span class="num purple">4</span>⭐ App Library 专章</h2>
+      <p class="lead">你的下一个任务。它到底是什么、在哪、怎么改。</p>
+
+      <div class="note purple">
+        <b>一句话定义</b>
+        App Library 是 mc-ui 里的一个<strong>全屏半透明导航 Overlay</strong>（组件 <code>AppsOverlay.vue</code>），是机器的"功能抽屉"：主厨模式、换锅、清洁、补液、语言、设置、机器 ID、睡眠、重启。它是<strong>纯前端导航</strong>，不拉任何后端数据；个别条目会触发 mc-api 调用（sleep / restart）。
+      </div>
+
+      <h3 id="applib-where">4.1 位置与触发方式</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>项</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td>组件文件</td><td><code>src/components/general/AppsOverlay.vue</code>（~110 行：template + 一小段 script + scoped style）</td></tr>
+            <tr><td>状态</td><td><code>GlobalProps.show_apps</code>（Pinia，<code>src/stores/GlobalProps.js</code>，默认 false）</td></tr>
+            <tr><td>挂载点</td><td><code>src/App.vue</code>：<code>&lt;AppsOverlay v-if="GlobalProps.show_apps"/&gt;</code>（和 PopUp / Restart / Language / QRCode 几个 Overlay 并列，z-index 1000）</td></tr>
+            <tr><td>标题 i18n</td><td><code>home.apps</code> = <code>'App Library'</code>（四种语言均有）</td></tr>
+            <tr><td>打开入口</td><td>
+              ① <code>Home.vue</code> 顶栏右上角图标（<code>assets/home/app_btn.svg</code>）→ <code>toggle_apps_on_off()</code>（顺带 <code>navigate_guard()</code>：退出自动接单 + 弹 <code>auto_accept_off</code>）<br>
+              ② <code>Menu.vue</code> / <code>Recipes.vue</code> 顶栏右上角 → <code>GlobalProps.show_apps=true</code><br>
+              ③ <code>ChefsMode.vue</code> 顶栏右上角 → <code>show_apps=true</code>
+            </td></tr>
+            <tr><td>关闭</td><td>TopBar 返回按钮（<code>back_btn_callback="hide"</code>）、点任意条目 <code>navigate()</code>、popup 回调/睡眠/重启时置 false</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="applib-items">4.2 现有条目拆解（自上而下）</h3>
+
+      <div class="mock-phone">
+        <div class="mock-title">App Library <span>🌐</span></div>
+        <div class="mock-row"><span class="ico">👨‍🍳</span> Chef's Mode</div>
+        <div class="mock-hr"></div>
+        <div class="mock-row"><span class="ico">🍳</span> Change Cooking Pot</div>
+        <div class="mock-gap"></div>
+        <div class="mock-row"><span class="ico">🧼</span> Cleaning</div>
+        <div class="mock-hr"></div>
+        <div class="mock-row"><span class="ico">🫗</span> Refill</div>
+        <div class="mock-gap"></div>
+        <div class="mock-row"><span class="ico">🌐</span> Language</div>
+        <div class="mock-hr"></div>
+        <div class="mock-row"><span class="ico">⚙️</span> Settings</div>
+        <div class="mock-hr"></div>
+        <div class="mock-row"><span class="ico">🔖</span> Machine ID</div>
+        <div class="mock-gap"></div>
+        <div class="mock-row"><span class="ico">🌙</span> Sleep Mode</div>
+        <div class="mock-restart">⏻ Restart Multicooker</div>
+      </div>
+      <p class="mock-caption">示意图（真实界面在深色 blur 遮罩上，字体为白色，图标在最左侧）</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>顺序</th><th>条目</th><th>图标（<code>assets/home/</code>）</th><th>i18n key</th><th>动作</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Chef's Mode</td><td><code>chefsmode.svg</code></td><td><code>chefs_mode.chefs_mode</code></td><td><code>navigate('/chefsmode')</code>；<strong>在 /chefsmode 页面内自动隐藏</strong>（<code>in_chefsmode</code>）</td></tr>
+            <tr><td colspan="5" style="background:#fafbfc;color:#98a2b3"><code>&lt;div class="horizontal_line row_next"/&gt;</code> 分隔线</td></tr>
+            <tr><td>2</td><td>Change Cooking Pot</td><td><code>change_cooking_pot.svg</code></td><td><code>settings.cooking_pot.change_cooking_pot</code></td><td><code>navigate('/settings/cookingpot/change')</code></td></tr>
+            <tr><td colspan="5" style="background:#fafbfc;color:#98a2b3"><code>&lt;div class="apps_item_gap"/&gt;</code> 大间距（60px，无分隔线）</td></tr>
+            <tr><td>3</td><td>Cleaning</td><td><code>cleaning.svg</code></td><td><code>settings.cleaning.cleaning</code></td><td><code>navigate('/settings/cleaning')</code></td></tr>
+            <tr><td colspan="5" style="background:#fafbfc;color:#98a2b3"><code>horizontal_line</code></td></tr>
+            <tr><td>4</td><td>Refill</td><td><code>refill.svg</code></td><td><code>settings.liquids.refill</code></td><td><code>navigate('/settings/liquids/refill')</code></td></tr>
+            <tr><td colspan="5" style="background:#fafbfc;color:#98a2b3"><code>apps_item_gap</code></td></tr>
+            <tr><td>5</td><td>Language</td><td><code>language.svg</code></td><td><code>settings.general.language.language</code></td><td><code>navigate('/settings/general/language')</code></td></tr>
+            <tr><td colspan="5" style="background:#fafbfc;color:#98a2b3"><code>horizontal_line</code></td></tr>
+            <tr><td>6</td><td>Settings</td><td><code>settings.svg</code></td><td><code>settings.settings</code></td><td><code>navigate('/settings')</code></td></tr>
+            <tr><td colspan="5" style="background:#fafbfc;color:#98a2b3"><code>horizontal_line</code></td></tr>
+            <tr><td>7</td><td>Machine ID</td><td><code>machine_id.svg</code></td><td><code>home.machine_id</code></td><td><code>navigate('/machineid')</code></td></tr>
+            <tr><td colspan="5" style="background:#fafbfc;color:#98a2b3"><code>apps_item_gap</code></td></tr>
+            <tr><td>8</td><td>Sleep Mode</td><td><code>sleep.svg</code></td><td><code>sleep.sleep_mode</code></td><td><code>show_popup('sleep_confirm')</code> → 回调里 <code>/machine/sleep</code> + 跳 /sleep</td></tr>
+            <tr><td>底部</td><td>Restart Multicooker</td><td><code>poweroff.svg</code>（蓝色长条按钮）</td><td><code>restart.restart_multicooker</code></td><td><code>show_popup('restart_confirm')</code> → 回调 <code>global.restart()</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="applib-style">4.3 样式与布局（改成什么样先看懂这些）</h3>
+      <pre><span class="cmt">全局 style.css（共享）</span>
+.overlay   → position:absolute; inset 0; width/height:100%; z-index:1000
+.blur      → backdrop-filter: blur(5px); background: rgba(28,28,30,.7)
+.horizontal_line → width:580px; height:2px; margin-left:100px; 圆角; 灰色
+.row_next  → margin-top:5px
+
+<span class="cmt">AppsOverlay.vue（scoped，只作用在本组件）</span>
+.apps_item_container        margin-top:60px; padding-left:120px
+.apps_item_container_bottom margin-left:100px; margin-bottom:60px
+.apps_item_gap              height:60px
+.text                       margin-left:55px; color:var(--white)   <span class="cmt">// 文字跟图标的间距</span>
+.restart_bar                width:700px
+.poweroff_text              margin-left:55px</pre>
+      <ul>
+        <li>整块界面是<strong>写死给 800×1280 画布</strong>的（<code>horizontal_line</code> 的 580px、容器的 120px 左缩进），改宽度/缩进要联动修改，别只改一处。</li>
+        <li>顶部用 <code>TopBar</code> 时传了 <code>white</code> + <code>show_language_white</code>：深色遮罩上文字和语言图标用白色版本。条目图标本身就是白色 SVG。</li>
+        <li>条目结构很朴素：<code>&lt;div class="clickable" @click&gt; &lt;img&gt; &lt;div class="text"&gt;文字&lt;/div&gt; &lt;/div&gt;</code>，没有组件化 abstract —— 改起来就是复制粘贴调整。</li>
+      </ul>
+
+      <h3 id="applib-mod">4.4 修改指南 + 避坑</h3>
+      <p><strong>典型改动清单（按照做即可）：</strong></p>
+      <ul class="checklist">
+        <li>新条目：图标 SVG 放 <code>src/assets/home/</code> → 在 <code>AppsOverlay.vue</code> 复制一个条目 div → 加 <code>$t</code> key（<code>i18n.js</code> 的 en/ja/zh_Hans/zh_Hant <strong>四个块都要加</strong>）</li>
+        <li>如果是新页面：<code>src/plugins/router.js</code> 注册路由 → 页面放 <code>views/</code> → 条目用 <code>navigate('/xxx')</code>；记得遵守 <code>protocol.js</code> 的状态跳转规则</li>
+        <li>如果是确认类动作：在 <code>src/defs/popup_defs.js</code> 定义 popup（参考 <code>sleep_confirm</code>/<code>restart_confirm</code>），条目只写 <code>show_popup('xxx_confirm')</code>；popup 回调里记得 <code>GlobalProps.show_apps = false</code></li>
+        <li>调整顺序/分组：直接挪 template 里的 div，保持 <code>horizontal_line</code> 与 <code>apps_item_gap</code> 的节奏</li>
+        <li>改间距/缩进：<code>AppsOverlay.vue</code> scoped 样式 + 全局 <code>.horizontal_line</code> 一起改（后者是全局类，影响面广）</li>
+        <li>本地预览：<code>npm run dev</code>（3001），Home 页点右上角 app 图标即可看到 Overlay</li>
+        <li>发布前：<code>settings.mjs</code> 与 <code>version.js</code> 版本号都要升 → 构建 → 上传（两个上传脚本都有守卫检查）</li>
+      </ul>
+
+      <div class="note danger">
+        <b>最容易踩的三个坑</b>
+        ① <strong>状态跳转</strong>：正在做菜/报警时 UI 会被 <code>route_machine_status</code> 强制跳走，测试新页面时先设 <code>disable_route_status=true</code>；<br>
+        ② <strong>/chefsmode 隐藏逻辑</strong>：<code>in_chefsmode</code> 只隐藏第一个条目，新增条目若也想隐藏要自己补判断；<br>
+        ③ <strong>Overlay 状态被打断</strong>：<code>show_apps</code> 会在 sleep/restart/popup 相关回调里被置 false，新增交互时留意别让遮罩"莫名关掉"。
+      </div>
+    </section>
+
+    <!-- ======================= 5 ======================= -->
+    <section id="dev">
+      <h2><span class="num">5</span>本地开发与发布</h2>
+      <p class="lead">两台服务 + 一个浏览器，就能联调大部分 UI（除硬件动作）。</p>
+
+      <pre><span class="cmt"># ---------- mc-api（后端，需 Node） ----------</span>
+cd ~/repos/mc-api
+npm install
+npm start                    <span class="cmt"># :3000；首次运行自动生成 settings.json</span>
+                             <span class="cmt"># 默认 machine_name=CM1、remote_broker_ip=10.93.2.233、串口 /dev/ttyS9</span>
+
+<span class="cmt"># ---------- mc-ui（前端） ----------</span>
+cd ~/repos/mc-ui
+npm install
+npm run dev                  <span class="cmt"># :3001，vite</span>
+<span class="cmt"># 联调：把 src/settings.mjs 改为</span>
+<span class="cmt">#   custom_server_origin: true</span>
+<span class="cmt">#   api_server_ip: '&lt;mc-api 所在机器 IP&gt;'</span>
+<span class="cmt"># 或直接访问 http://&lt;mc-api 机器&gt;:3000/（走 mc-api 托管的构建产物）</span>
+
+<span class="cmt"># ---------- 构建 / 发布 ----------</span>
+<span class="cmt"># mc-ui:  version 改 src/settings.mjs</span>
+npm run build && npm run upload          <span class="cmt"># 测试：v6/test/ui.zip</span>
+npm run build && npm run upload-release  <span class="cmt"># 发布：v6/ui.zip</span>
+<span class="cmt"># mc-api: version 改 version.js</span>
+npm run build && npm run upload
+
+<span class="cmt"># 需要 .env：AZURE_STORAGE_CONNECTION_STRING=...</span>
+<span class="cmt"># 机器端升级：访问 /update/updater 或用 /update/update?type=all[&amp;test=1]</span></pre>
+
+      <div class="grid2">
+        <div class="mini-card">
+          <h4>无硬件时怎么开发</h4>
+          <p>mc-api 没串口也能起，状态会停在 FAILURE/超时；调 UI 页面足够。菜单数据可手动往 <code>menu/</code> 里放 json（或调 <code>/menu/upload</code>）。</p>
+          <p>浏览器按 Enter 可以切换回固定 IP 并打开 <code>disable_route_status</code>（App.vue 里的调试快捷键）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>机器上的运行形态</h4>
+          <p>systemd <code>multicooker.service</code>：WorkingDirectory=<code>/multicooker</code>，ExecStart=<code>node ./index.js</code>，启动后跑 <code>ui_start.sh</code>（拉起 Chromium 全屏）。</p>
+          <p><code>UI.js</code> 每 15s 检查是否还有浏览器连着，没有就自动重启服务。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================= 6 ======================= -->
+    <section id="reading">
+      <h2><span class="num">6</span>建议阅读顺序</h2>
+      <p class="lead">按这个顺序读，一个下午能上手 App Library 的改动。</p>
+      <ol>
+        <li><code>mc-ui/src/components/general/AppsOverlay.vue</code> —— 你的主战场，先看 10 分钟</li>
+        <li><code>mc-ui/src/App.vue</code> —— Overlay 怎么挂、画布怎么居中</li>
+        <li><code>mc-ui/src/stores/GlobalProps.js</code> —— <code>show_apps</code> 与全局 UI 状态</li>
+        <li><code>mc-ui/src/main.js</code> —— 全局函数、WebSocket、settings 来源</li>
+        <li><code>mc-ui/src/protocol.js</code> —— 页面为什么会被"强行"跳走</li>
+        <li><code>mc-ui/src/plugins/router.js</code> + <code>i18n.js</code> —— 路由与四语言文案</li>
+        <li><code>mc-api/index.js</code> → <code>src/Machine.js</code> —— 后端如何接收 <code>send_cmd</code> 与广播状态</li>
+        <li>（需要时）<code>mc-api/src/Menu.js</code> / <code>Settings.js</code> / <code>Update.js</code></li>
+      </ol>
+      <footer class="foot">Multicooker (MC) onboarding 材料 · mc-ui + mc-api · 与 Hestia 全厨架构串讲配套使用</footer>
+    </section>
+
+  </main>
+</div>
+
+<button id="toTop" title="回到顶部">↑</button>
+
+<script>
+  const links = Array.from(document.querySelectorAll('nav.toc a'));
+  const targets = links
+    .map(a => document.querySelector(a.getAttribute('href')))
+    .filter(Boolean);
+
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const link = links.find(l => l.getAttribute('href') === '#' + entry.target.id);
+        if (link) link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-10% 0px -80% 0px', threshold: 0 });
+
+  targets.forEach(t => observer.observe(t));
+
+  const btn = document.getElementById('toTop');
+  window.addEventListener('scroll', () => {
+    btn.style.display = window.scrollY > 400 ? 'block' : 'none';
+  });
+  btn.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+</script>
+
+</body>
+</html>
