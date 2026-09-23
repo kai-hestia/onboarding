@@ -272,6 +272,14 @@ Wire format (observed from `src/Machine.js`):
 | `~PREPINFO: 0 1 1 1 1 1 1 1 0` | cook mode + 7 slot statuses |
 | `~COOKINFO: <mode> (<cur>) (<next>) <step> <total> <remain> <total_sec>` | step/action/countdown |
 | `~INIT: 127 127` | marks all 7 init checks done (sent on the `INIT` command) |
+| `~SETTINGS: START` … JSON … `~SETTINGS: END` | controller `settings.json` dump (after `INIT` and after `LOADF`) |
+
+**Controller settings.** The mock keeps a copy of the controller `settings.json` (values from
+`CM1`, including `GRIP_SLOW_ACC` / `ENABLE_GRIP_SLOW`) and serializes it between
+`~SETTINGS: START/END` once `INIT` is sent. `LOADF` makes it parse the uploaded file chunk
+stream, merge it into its copy, and echo `~SETTINGS` back — so Backend → Parameters → Save
+round-trips through the real code path (`/machine/settingsupdate` → `/machine/settingssave`
+→ `UPLOADF` + `LOADF`) instead of only updating the API's in-memory copy.
 
 **Boot flow (added for local recovery).** The mock starts with `sys: 'RESET'` instead of
 `IDLE`, which makes the UI route itself to the activation screen (`/qrcode`) on every page

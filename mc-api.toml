@@ -23,7 +23,35 @@ const fs = require('fs')
 const RESET_FLAG = '/tmp/mc-mock-reset'
 try { fs.unlinkSync(RESET_FLAG) } catch {}
 const state = { status: 'IDLE', sys: 'RESET', alert: -1, temperature: 25, target: 0, heating: 0, cook: 0, motion: 0 }
+// controller settings.json (same shape the real controller serializes via ~SETTINGS)
+const settings = {
+  version: 6, feat_version: 0, bug_version: 10, test_version: 1, hostname: 'CM1',
+  Heater_PID_P: 5, Heater_PID_I: 0.5, Heater_PID_D: 0, Heater_PID_windupGuard: 100,
+  TempControlDeadZone: 3, MAX_TARGET_TEMP: 300,
+  FEED_LOAD: [5, 890, 1770, 2650, 3540, 4420, 5308],
+  FEED_POUR: [1073, 1958, 2843, 3728, 4613, 5498, 6383],
+  FEED_POUR_RETRACT: 130, PUSH_BOX: 765, PUSH_RETRY_OFFSET: 100, PUSH_WAIT: 560,
+  GRIP_IDLE: 0, GRIP_POUR: 4240, GRIP_MON_TOP: 1800, GRIP_WOK_LOAD: 5000,
+  GRIP_GETBOX: [9120, 9120, 9120, 9120, 9120, 9120, 9120],
+  PLATE_LOADFOOD: 10932, PLATE_STARTLOAD: 7555, PLATE_SERVEFOOD: 0, PLATE_CHECK: 3663,
+  WOK_FRY: 1112, WOK_LOADFOOD: 168, WOK_LOADLQ: 0, WOK_UNLOADFOOD_END: 3960,
+  WOK_UNLOADFOOD_START: 1545, WOK_CLEANING: 4130, WOK_CHANGE: 2675, WOK_CLEAN_BASE: 2000,
+  ENABLE_PLATE_SNR: 1, ENABLE_GRIP_HOME2: 1, ENABLE_GRIP_HOMEM: 1, ENABLE_CONV_FRONT_SNR: 1,
+  ENABLE_TEMP_DIFF_CHK: 0, ENABLE_EXTEND_CLEAN: 0, DISABLE_LOWSPD_CHK: 0,
+  ENABLE_CLEAN_CONFIRM: 0, ENABLE_FINGER_MID_CHK: 1, ENABLE_POWDER_WATER: 0,
+  WATER_WAIT_OUT: 11131, OIL_WAIT_OUT: 2000, STARCH_WAIT_OUT: 4616,
+  WATER_TUNE_CNST: 124600, OIL_TUNE_CNST: 721, STARCH_TUNE_CNST: 327,
+  OIL_BACKPROP: 0, STARCH_FORWARDPROP: 0, WOKCHANGE_LIMIT: 250,
+  GRIP_FLIP_UP: 57, GRIP_FLIP_DOWN: 346, GRIP_FLIP_THROWBOX: -10, GRIP_FLIP_DOWN_TILT: 370,
+  GRIP_FINGER_FIRM: 580, POT_YAW_CAL_K: 1.111,
+  GRIP_SLOW_ACC: 18000, ENABLE_GRIP_SLOW: false,
+}
 const out = (line) => process.stdout.write(line + '\n')
+const send_settings = () => {
+  out('~SETTINGS: START')
+  out(JSON.stringify(settings))
+  out('~SETTINGS: END')
+}
 const tick = () => {
   // board_enable.sh touches the flag on wake; boot again so the UI can re-activate
   if (fs.existsSync(RESET_FLAG)) {
@@ -59,13 +87,21 @@ function start_cook(id) {
 }
 let buf = Buffer.alloc(0)
 let upload = null
+let last_upload = null
 const handle = (line) => {
   if (!line) return
   const [cmd, ...args] = line.split(' ')
   if (cmd === 'UPLOADF') {
     out('~CMD: OK')
-    upload = parseInt(args[1], 10) || 0
+    upload = { name: args[0], remaining: parseInt(args[1], 10) || 0, data: Buffer.alloc(0) }
     out('~UPLOADF: START')
+  } else if (cmd === 'LOADF') {
+    out('~CMD: OK')
+    if (last_upload && last_upload.name === 'settings.json') {
+      try { Object.assign(settings, JSON.parse(last_upload.data.toString('utf8'))) } catch (e) { out('~Error: settings parse failed') }
+      send_settings()
+    }
+    last_upload = null
   } else if (cmd === 'COOK' || cmd === 'SCOOK') {
     out('~CMD: OK')
     start_cook(args[0])
@@ -74,6 +110,7 @@ const handle = (line) => {
     out('~INIT: 127 127')
     Object.assign(state, { sys: 'IDLE' })
     tick()
+    send_settings()
   } else {
     out('~CMD: OK')
   }
@@ -81,12 +118,13 @@ const handle = (line) => {
 const pump = () => {
   for (;;) {
     if (upload !== null) {
-      const size = Math.min(1024, upload)
+      const size = Math.min(1024, upload.remaining)
       if (buf.length < size + 2) return
+      upload.data = Buffer.concat([upload.data, buf.subarray(0, size)])
       buf = buf.subarray(size + 2)
-      upload -= size
+      upload.remaining -= size
       out('~UPLOADF: CHUNK')
-      if (upload <= 0) upload = null
+      if (upload.remaining <= 0) { last_upload = upload; upload = null }
       continue
     }
     if (buf.length < 52) return
