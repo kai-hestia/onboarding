@@ -15,6 +15,8 @@ commands:
   backup            snapshot the live /multicooker/ui; prints the rollback cmd last
   rollback <zip>    upload a backup zip (path, filename or timestamp)
   update            full flow: build -> backup -> upload -> verify
+
+Uses mise (when available) so the build runs the repo's pinned node/npm.
 """
 
 from __future__ import annotations
@@ -37,7 +39,9 @@ REPO = Path.home() / "repos" / "mc-ui"
 BACKUPS = REPO / "backups"
 REMOTE_UI = "/multicooker/ui"
 REMOTE_TMP_ZIP = "/multicooker/tmp/ui.zip"
-ALL_TOOLS = ("npm", "ssh", "scp", "rsync", "curl")
+UPLOAD_ATTEMPTS = 6
+UPLOAD_RETRY_DELAY = 5  # seconds
+ALL_TOOLS = ("ssh", "scp", "rsync", "curl")
 
 USAGE = """\
 usage: update-mc-ui-at-mc6 <command> [args]
@@ -128,6 +132,18 @@ def require_tools(tools: tuple[str, ...]) -> None:
         raise DeployError(f"missing required tools: {', '.join(missing)} (run doctor)")
 
 
+def tool_cmd(*args: str) -> list[str]:
+    """Run through mise when available, so the repo's pinned node (mise.local.toml) is
+    used no matter which directory the script was launched from."""
+    if shutil.which("mise"):
+        return ["mise", "exec", "--", *args]
+    return list(args)
+
+
+def require_toolchain() -> None:
+    require_tools(("mise",) if shutil.which("mise") else ("npm",))
+
+
 def asset_refs(html: str) -> set[str]:
     return set(re.findall(r'assets/[^"\']+', html))
 
@@ -167,6 +183,13 @@ def check_repo() -> tuple[str, str]:
     return version, f"{branch}@{commit}"
 
 
+def check_toolchain() -> None:
+    node = run(tool_cmd("node", "--version"), cwd=REPO, capture=True, timeout=60).stdout.strip()
+    npm = run(tool_cmd("npm", "--version"), cwd=REPO, capture=True, timeout=60).stdout.strip()
+    how = "mise" if shutil.which("mise") else "PATH"
+    info(f"node {node}, npm {npm} ({how})")
+
+
 def check_ssh() -> None:
     # BatchMode=yes: fail fast instead of hanging on a password prompt.
     run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", SSH, "true"],
@@ -175,7 +198,10 @@ def check_ssh() -> None:
 
 
 def check_api() -> None:
-    version = http_get(f"{API}/settings/version", timeout=5).strip()
+    try:
+        version = http_get(f"{API}/settings/version", timeout=5).strip()
+    except Exception as exc:  # noqa: BLE001 - report any network failure as a check failure
+        raise DeployError(f"mc-api unreachable at {API}: {exc}") from exc
     info(f"mc-api {API} OK ({version})")
 
 
@@ -189,7 +215,7 @@ def build() -> Path:
     before = zip_path.stat().st_mtime_ns if zip_path.is_file() else None
     start = time.monotonic()
     # Quiet on success; run() puts the full log into the error if the build fails.
-    run(["npm", "run", "build"], cwd=REPO, capture=True, timeout=600)
+    run(tool_cmd("npm", "run", "build"), cwd=REPO, capture=True, timeout=600)
     if not zip_path.is_file():
         raise DeployError(f"build did not produce {zip_path}")
     if before is not None and zip_path.stat().st_mtime_ns <= before:
@@ -251,18 +277,29 @@ def backup() -> tuple[Path, Path, Path | None]:
 
 def upload(zip_path: Path) -> None:
     step(f"Uploading to {API}/update/upload (field: ui)")
-    cp = run(
-        ["curl", "-sS", "--max-time", "300", "-f", "-F", f"ui=@{zip_path}",
-         f"{API}/update/upload"],
-        check=False, capture=True, timeout=330,
-    )
-    if cp.returncode == 0:
-        info(f"response: {cp.stdout.strip() or '(empty)'}")
-    else:
-        # The response is sent before the service restarts; the connection often
-        # resets mid-restart. Verification below is the real success signal.
-        warn(f"curl exit {cp.returncode} ({cp.stderr.strip() or 'connection reset'}) - "
-             "expected during restart, verifying anyway")
+    for attempt in range(1, UPLOAD_ATTEMPTS + 1):
+        cp = run(
+            ["curl", "-sS", "--max-time", "300", "-f", "-F", f"ui=@{zip_path}",
+             f"{API}/update/upload"],
+            check=False, capture=True, timeout=330,
+        )
+        if cp.returncode == 0:
+            info(f"response: {cp.stdout.strip() or '(empty)'}")
+            return
+        err = cp.stderr.strip() or "connection reset"
+        if cp.returncode == 22:  # HTTP error from the endpoint
+            raise DeployError(f"upload rejected by {API}: {cp.stdout.strip() or err}")
+        if cp.returncode in (7, 28) and attempt < UPLOAD_ATTEMPTS:  # not connected / timed out
+            warn(f"upload attempt {attempt}/{UPLOAD_ATTEMPTS} could not reach the device "
+                 f"({err}); retrying in {UPLOAD_RETRY_DELAY}s")
+            time.sleep(UPLOAD_RETRY_DELAY)
+            continue
+        if cp.returncode in (7, 28):
+            raise DeployError(f"could not reach {API}/update/upload after "
+                              f"{UPLOAD_ATTEMPTS} attempts: {err}")
+        # The request landed, but the response was cut by the service restart.
+        warn(f"curl exit {cp.returncode} ({err}) - expected during restart, verifying anyway")
+        return
 
 
 def verify(expected_refs: set[str]) -> None:
@@ -328,7 +365,9 @@ def cmd_doctor() -> int:
     step("Doctor")
     require_tools(ALL_TOOLS)
     info(f"tools: {', '.join(ALL_TOOLS)} OK")
+    require_toolchain()
     check_repo()
+    check_toolchain()
     check_ssh()
     check_api()
     print("\ndoctor: all checks passed", flush=True)
@@ -336,7 +375,7 @@ def cmd_doctor() -> int:
 
 
 def cmd_build() -> int:
-    require_tools(("npm",))
+    require_toolchain()
     check_repo()
     zip_path = build()
     validate_zip(zip_path)
@@ -385,6 +424,7 @@ def cmd_update() -> int:
     rc = 0
     try:
         require_tools(ALL_TOOLS)
+        require_toolchain()
         version, revision = check_repo()
         check_ssh()
         check_api()
