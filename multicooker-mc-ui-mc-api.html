@@ -780,7 +780,7 @@ npm run build && npm run upload
       </div>
 
       <h3 id="deploy-flow">6.1 推荐方式：设备自带的 HTTP 更新接口</h3>
-      <p><code>POST /update/upload</code> 本来就是 <code>/update/updater</code> 网页和 Azure 升级共用的入口。直接 POST 一个 <code>ui.zip</code> 给它，就等价于“本地上传升级包”：mc-api 以 root 身份删掉旧的 <code>/multicooker/ui</code>、解压新包并重启 <code>multicooker.service</code>，kiosk Chromium 随之重启并加载新页面。</p>
+      <p><code>POST /update/upload</code> 本来就是 <code>/update/updater</code> 网页和 Azure 升级共用的入口。直接 POST 一个 <code>ui.zip</code> 给它，就等价于“本地上传升级包”：mc-api 以 root 身份删掉旧的 <code>/multicooker/ui</code>、解压新包并重启 <code>multicooker.service</code>，kiosk Chromium 随之重启并加载新页面。下面这套流程已封装成 uv shebang 脚本 <code>~/repos/onboarding/update-mc-ui-at-mc6</code>，可直接运行。</p>
 
       <div class="flow">
         <div class="frow">
@@ -810,7 +810,7 @@ unzip -l tmp/ui.zip | grep -q 'ui/index.html' || echo '!! zip 结构不对，别
 
 <span class="cmt"># ---------- 备份当前部署（只读拉取，不需要 sudo） ----------</span>
 ts=$(date +%Y%m%d-%H%M%S); mkdir -p backups
-rsync -a mc@10.31.1.101:/multicooker/ui/ backups/ui-$ts/    <span class="cmt"># 实际部署内容</span>
+rsync -a mc:/multicooker/ui/ backups/ui-$ts/                <span class="cmt"># 实际部署内容（主机名用别名 mc:，不要写 IP）</span>
 scp mc:/multicooker/tmp/ui.zip backups/ui-$ts.zip           <span class="cmt"># 设备上最近一次升级包</span>
 
 <span class="cmt"># ---------- 上传（字段名必须是 ui；千万不要带 api / firmware） ----------</span>
@@ -824,7 +824,7 @@ curl -s http://10.31.1.101:3000/machine/clients                       <span clas
 
       <div class="note warn">
         <b>为什么不能用 scp / rsync 直接覆盖</b>
-        <code>/multicooker/ui</code> 属于 <code>root</code>，<code>mc</code> 既没有写权限也没有免密 sudo；而 <code>POST /update/upload</code> 由 root 的 mc-api 处理，相当于借设备自己的手完成替换。rsync 在 mc6 上只能用来<strong>从设备往回拉</strong>做备份。
+        <code>/multicooker/ui</code> 属于 <code>root</code>，<code>mc</code> 既没有写权限也没有免密 sudo；而 <code>POST /update/upload</code> 由 root 的 mc-api 处理，相当于借设备自己的手完成替换。rsync 在 mc6 上只能用来<strong>从设备往回拉</strong>做备份。另外 rsync/scp 的主机名必须写成 ssh 别名 <code>mc:</code>；写成 <code>mc@10.31.1.101</code> 会匹配不到 ssh config 里的 <code>Host mc</code>，退化成密码认证。
       </div>
 
       <h3 id="deploy-rollback">6.2 回滚</h3>

@@ -1,0 +1,446 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
+"""Deploy the local mc-ui build to the mc6 test device.
+
+Mirrors onboarding/multicooker-mc-ui-mc-api.html §6.1. The device's mc-api runs
+as root, so no sudo, no Azure credentials and no scp/rsync write access to
+/multicooker/ui are needed.
+
+commands:
+  doctor            check tools, repo, settings flags, ssh and mc-api access
+  build             npm run build + validate tmp/ui.zip
+  backup            snapshot the live /multicooker/ui; prints the rollback cmd last
+  rollback <zip>    upload a backup zip (path, filename or timestamp)
+  update            full flow: build -> backup -> upload -> verify
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.request
+import zipfile
+from datetime import datetime
+from pathlib import Path
+
+IP = "10.31.1.101"
+SSH = "mc"  # ssh alias from ~/.ssh/config (carries User + IdentityFile)
+API = f"http://{IP}:3000"
+REPO = Path.home() / "repos" / "mc-ui"
+BACKUPS = REPO / "backups"
+REMOTE_UI = "/multicooker/ui"
+REMOTE_TMP_ZIP = "/multicooker/tmp/ui.zip"
+ALL_TOOLS = ("npm", "ssh", "scp", "rsync", "curl")
+
+USAGE = """\
+usage: update-mc-ui-at-mc6 <command> [args]
+
+commands:
+  doctor            check tools, repo, settings flags, ssh and mc-api access
+  build             npm run build + validate tmp/ui.zip
+  backup            snapshot the live /multicooker/ui; prints the rollback cmd last
+  rollback <zip>    upload a backup zip (path, filename or timestamp)
+  update            full flow: build -> backup -> upload -> verify
+"""
+
+
+class DeployError(RuntimeError):
+    pass
+
+
+# --------------------------------------------------------------------------- #
+# small helpers
+# --------------------------------------------------------------------------- #
+
+def step(msg: str) -> None:
+    print(f"\n=== {msg}", flush=True)
+
+
+def info(msg: str) -> None:
+    print(f"    {msg}", flush=True)
+
+
+def warn(msg: str) -> None:
+    print(f"    WARN: {msg}", flush=True)
+
+
+def run(
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+    check: bool = True,
+    capture: bool = False,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess:
+    try:
+        cp = subprocess.run(
+            cmd,
+            cwd=str(cwd) if cwd else None,
+            capture_output=capture,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise DeployError(f"command timed out: {' '.join(cmd)}") from exc
+    except FileNotFoundError as exc:
+        raise DeployError(f"command not found: {cmd[0]}") from exc
+    if check and cp.returncode != 0:
+        detail = ((cp.stderr or "") + (cp.stdout or "")).strip()
+        raise DeployError(
+            f"command failed (exit {cp.returncode}): {' '.join(cmd)}"
+            + (f"\n{detail}" if detail else "")
+        )
+    return cp
+
+
+def http_get(url: str, timeout: float = 5) -> str:
+    req = urllib.request.Request(url, headers={"Cache-Control": "no-cache"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode("utf-8", "replace")
+
+
+def poll(probe, timeout: float, interval: float, desc: str):
+    """Call probe() until it returns (ok, value); raise DeployError on timeout."""
+    deadline = time.monotonic() + timeout
+    last: Exception | str | None = None
+    while time.monotonic() < deadline:
+        try:
+            ok, value = probe()
+            if ok:
+                return value
+        except Exception as exc:  # noqa: BLE001 - expected while the service restarts
+            last = exc
+        time.sleep(interval)
+    raise DeployError(f"timed out after {timeout:.0f}s waiting for {desc}"
+                      + (f" (last error: {last})" if last else ""))
+
+
+def require_tools(tools: tuple[str, ...]) -> None:
+    missing = [tool for tool in tools if not shutil.which(tool)]
+    if missing:
+        raise DeployError(f"missing required tools: {', '.join(missing)} (run doctor)")
+
+
+def asset_refs(html: str) -> set[str]:
+    return set(re.findall(r'assets/[^"\']+', html))
+
+
+def asset_refs_from_zip(zip_path: Path) -> set[str]:
+    with zipfile.ZipFile(zip_path) as zf:
+        return asset_refs(zf.read("ui/index.html").decode("utf-8", "replace"))
+
+
+# --------------------------------------------------------------------------- #
+# checks
+# --------------------------------------------------------------------------- #
+
+def check_repo() -> tuple[str, str]:
+    if not (REPO / "package.json").is_file() or not (REPO / "src" / "settings.mjs").is_file():
+        raise DeployError(f"not an mc-ui checkout: {REPO}")
+
+    # The Azure uploader refuses to publish debug configs; do the same before deploying.
+    settings = (REPO / "src" / "settings.mjs").read_text(encoding="utf-8")
+    for key in ("custom_server_origin", "disable_route_status"):
+        match = re.search(rf"{key}\s*:\s*(true|false)", settings)
+        if not match:
+            raise DeployError(f"{key} not found in src/settings.mjs")
+        if match.group(1) != "false":
+            raise DeployError(f"src/settings.mjs has {key}: true - fix it before deploying")
+    version = re.search(r"version\s*:\s*'([^']+)'", settings)
+    version = version.group(1) if version else "unknown"
+
+    branch = run(["git", "-C", str(REPO), "branch", "--show-current"],
+                 check=False, capture=True).stdout.strip() or "detached"
+    commit = run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"],
+                 check=False, capture=True).stdout.strip() or "unknown"
+    dirty = run(["git", "-C", str(REPO), "status", "--porcelain"],
+                check=False, capture=True).stdout.strip()
+    info(f"mc-ui version {version} @ {branch} ({commit})"
+         + (" - working tree dirty" if dirty else ""))
+    return version, f"{branch}@{commit}"
+
+
+def check_ssh() -> None:
+    # BatchMode=yes: fail fast instead of hanging on a password prompt.
+    run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", SSH, "true"],
+        capture=True, timeout=15)
+    info(f"ssh {SSH} OK")
+
+
+def check_api() -> None:
+    version = http_get(f"{API}/settings/version", timeout=5).strip()
+    info(f"mc-api {API} OK ({version})")
+
+
+# --------------------------------------------------------------------------- #
+# deploy steps
+# --------------------------------------------------------------------------- #
+
+def build() -> Path:
+    step("Building mc-ui (npm run build)")
+    zip_path = REPO / "tmp" / "ui.zip"
+    before = zip_path.stat().st_mtime_ns if zip_path.is_file() else None
+    start = time.monotonic()
+    # Quiet on success; run() puts the full log into the error if the build fails.
+    run(["npm", "run", "build"], cwd=REPO, capture=True, timeout=600)
+    if not zip_path.is_file():
+        raise DeployError(f"build did not produce {zip_path}")
+    if before is not None and zip_path.stat().st_mtime_ns <= before:
+        raise DeployError(f"build did not refresh {zip_path} - refusing to use the stale artifact")
+    info(f"build OK in {time.monotonic() - start:.1f}s")
+    return zip_path
+
+
+def validate_zip(zip_path: Path) -> None:
+    step(f"Validating {zip_path.name}")
+    with zipfile.ZipFile(zip_path) as zf:
+        bad = zf.testzip()
+        if bad:
+            raise DeployError(f"corrupt zip entry: {bad}")
+        names = zf.namelist()
+    if "ui/index.html" not in names:
+        raise DeployError("zip must contain top-level ui/index.html "
+                          "(unzip would otherwise scatter files into /multicooker)")
+    for name in names:
+        if name.startswith("/") or ".." in Path(name).parts:
+            raise DeployError(f"unsafe zip entry: {name}")
+    info(f"{zip_path}: {len(names)} entries, {zip_path.stat().st_size / 1e6:.1f} MB, layout OK")
+
+
+def backup() -> tuple[Path, Path, Path | None]:
+    step("Backing up the current deploy from mc6")
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    BACKUPS.mkdir(exist_ok=True)
+    snapshot = BACKUPS / f"ui-{ts}"
+    rollback_zip = BACKUPS / f"ui-{ts}.zip"
+
+    run(
+        ["rsync", "-a", "-e", "ssh -o BatchMode=yes -o ConnectTimeout=8",
+         f"{SSH}:{REMOTE_UI}/", str(snapshot) + "/"],
+        timeout=300,
+    )
+    if not (snapshot / "index.html").is_file():
+        raise DeployError(f"backup looks empty ({snapshot}) - aborting before touching the device")
+    info(f"live ui/  -> {snapshot}")
+
+    # The device's last update package is nice-to-have; the snapshot above is authoritative.
+    device_zip = BACKUPS / f"ui-{ts}-device.zip"
+    try:
+        run(["scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
+             f"{SSH}:{REMOTE_TMP_ZIP}", str(device_zip)], capture=True, timeout=300)
+        info(f"device tmp/ui.zip -> {device_zip}")
+    except DeployError as exc:
+        warn(f"could not pull device tmp/ui.zip ({exc}); snapshot is still intact")
+        device_zip = None
+
+    # Repackage the snapshot with a top-level ui/ so it can be POSTed as-is.
+    with zipfile.ZipFile(rollback_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(snapshot.rglob("*")):
+            if path.is_file():
+                zf.write(path, arcname="ui/" + path.relative_to(snapshot).as_posix())
+    info(f"rollback zip -> {rollback_zip}")
+    return snapshot, rollback_zip, device_zip
+
+
+def upload(zip_path: Path) -> None:
+    step(f"Uploading to {API}/update/upload (field: ui)")
+    cp = run(
+        ["curl", "-sS", "--max-time", "300", "-f", "-F", f"ui=@{zip_path}",
+         f"{API}/update/upload"],
+        check=False, capture=True, timeout=330,
+    )
+    if cp.returncode == 0:
+        info(f"response: {cp.stdout.strip() or '(empty)'}")
+    else:
+        # The response is sent before the service restarts; the connection often
+        # resets mid-restart. Verification below is the real success signal.
+        warn(f"curl exit {cp.returncode} ({cp.stderr.strip() or 'connection reset'}) - "
+             "expected during restart, verifying anyway")
+
+
+def verify(expected_refs: set[str]) -> None:
+    step("Verifying the deploy")
+    if not expected_refs:
+        raise DeployError("no asset refs found in the zip's index.html - unexpected")
+
+    def assets_served():
+        refs = asset_refs(http_get(f"{API}/", timeout=5))
+        return expected_refs <= refs, refs
+
+    poll(assets_served, timeout=90, interval=2, desc="new assets to be served")
+    info(f"served assets match the deployed build ({len(expected_refs)} refs)")
+
+    ssh_base = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", SSH]
+
+    def service_active():
+        out = run(ssh_base + ["systemctl", "is-active", "multicooker"],
+                  check=False, capture=True, timeout=15).stdout.strip()
+        return out == "active", out
+
+    state = poll(service_active, timeout=60, interval=3, desc="multicooker.service to be active")
+    info(f"multicooker.service: {state}")
+
+    def kiosk_connected():
+        clients = json.loads(http_get(f"{API}/machine/clients", timeout=5))
+        loopback = [c for c in clients if "127.0.0.1" in c or c in ("::1", "0:0:0:0:0:0:0:1")]
+        return bool(loopback), clients
+
+    try:
+        clients = poll(kiosk_connected, timeout=90, interval=3, desc="kiosk WS client to reconnect")
+        info(f"kiosk WS client back ({', '.join(clients)})")
+    except DeployError as exc:
+        warn(f"{exc} - files and service are fine, check the kiosk manually")
+
+
+def resolve_rollback_zip(arg: str) -> Path:
+    path = Path(arg).expanduser()
+    if path.is_file():
+        return path.resolve()
+    for candidate in (BACKUPS / arg, BACKUPS / f"ui-{arg}.zip", BACKUPS / f"{arg}.zip"):
+        if candidate.is_file():
+            return candidate.resolve()
+    raise DeployError(f"rollback zip not found: {arg} (looked in {BACKUPS})")
+
+
+def print_rollback_hint(zip_path: Path) -> None:
+    print(f"""
+======================================================================================================
+
+to rollback, run:
+
+update-mc-ui-at-mc6 rollback {zip_path}
+
+======================================================================================================""", flush=True)
+
+
+# --------------------------------------------------------------------------- #
+# commands
+# --------------------------------------------------------------------------- #
+
+def cmd_doctor() -> int:
+    step("Doctor")
+    require_tools(ALL_TOOLS)
+    info(f"tools: {', '.join(ALL_TOOLS)} OK")
+    check_repo()
+    check_ssh()
+    check_api()
+    print("\ndoctor: all checks passed", flush=True)
+    return 0
+
+
+def cmd_build() -> int:
+    require_tools(("npm",))
+    check_repo()
+    zip_path = build()
+    validate_zip(zip_path)
+    print(f"\nbuild: {zip_path} ready to upload", flush=True)
+    return 0
+
+
+def cmd_backup() -> int:
+    rollback_zip: Path | None = None
+    rc = 0
+    try:
+        require_tools(("ssh", "scp", "rsync"))
+        version, revision = check_repo()
+        check_ssh()
+        snapshot, rollback_zip, device_zip = backup()
+        print("\n" + "-" * 64)
+        print(f"backup of mc6 ({IP}), mc-ui {version} ({revision})")
+        print(f"  snapshot   : {snapshot}")
+        if device_zip:
+            print(f"  device zip : {device_zip}")
+        print(f"  rollback   : {rollback_zip}")
+        print("-" * 64, flush=True)
+    except DeployError as exc:
+        print(f"\nFAILED: {exc}", file=sys.stderr, flush=True)
+        rc = 1
+    finally:
+        if rollback_zip and rollback_zip.is_file():
+            print_rollback_hint(rollback_zip)
+    return rc
+
+
+def cmd_rollback(arg: str) -> int:
+    require_tools(("ssh", "curl"))
+    zip_path = resolve_rollback_zip(arg)
+    validate_zip(zip_path)
+    upload(zip_path)
+    verify(asset_refs_from_zip(zip_path))
+    print("\n" + "-" * 64)
+    print(f"mc6 ({IP}) rolled back to {zip_path.name}")
+    print("-" * 64, flush=True)
+    return 0
+
+
+def cmd_update() -> int:
+    rollback_zip: Path | None = None
+    rc = 0
+    try:
+        require_tools(ALL_TOOLS)
+        version, revision = check_repo()
+        check_ssh()
+        check_api()
+
+        zip_path = build()
+        validate_zip(zip_path)
+
+        snapshot, rollback_zip, _device_zip = backup()
+        upload(zip_path)
+        verify(asset_refs((REPO / "ui" / "index.html").read_text(encoding="utf-8")))
+
+        print("\n" + "-" * 64)
+        print(f"mc-ui {version} ({revision}) deployed to mc6 ({IP})")
+        print(f"  backup: {snapshot}")
+        print("-" * 64, flush=True)
+    except DeployError as exc:
+        print(f"\nFAILED: {exc}", file=sys.stderr, flush=True)
+        rc = 1
+    finally:
+        if rollback_zip and rollback_zip.is_file():
+            print_rollback_hint(rollback_zip)
+    return rc
+
+
+# --------------------------------------------------------------------------- #
+# entry point
+# --------------------------------------------------------------------------- #
+
+def main() -> int:
+    argv = sys.argv[1:]
+    if not argv or argv[0] in ("help", "-h", "--help"):
+        print(USAGE, end="")
+        return 0
+
+    cmd, rest = argv[0], argv[1:]
+    try:
+        if cmd == "doctor":
+            return cmd_doctor()
+        if cmd == "build":
+            return cmd_build()
+        if cmd == "backup":
+            return cmd_backup()
+        if cmd == "rollback":
+            if len(rest) != 1:
+                print("usage: update-mc-ui-at-mc6 rollback <zip>", file=sys.stderr)
+                return 2
+            return cmd_rollback(rest[0])
+        if cmd == "update":
+            return cmd_update()
+    except DeployError as exc:
+        print(f"\nFAILED: {exc}", file=sys.stderr, flush=True)
+        return 1
+
+    print(USAGE, end="", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
